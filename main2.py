@@ -25,43 +25,83 @@ from collections import OrderedDict
 import warnings
 warnings.filterwarnings('ignore')
 
+# ==================== HARDWARE DETECTION ====================
+def _detect_hardware():
+    """Auto-detect hardware capabilities and return a summary dict."""
+    info = {
+        'has_cuda': torch.cuda.is_available(),
+        'gpu_name': None,
+        'gpu_count': 0,
+        'vram_gb': 0.0,
+        'cpu_cores': psutil.cpu_count(logical=False) or 1,
+        'ram_gb': psutil.virtual_memory().total / (1024**3),
+        'use_fp16': False,
+    }
+    if info['has_cuda']:
+        info['gpu_count'] = torch.cuda.device_count()
+        info['gpu_name'] = torch.cuda.get_device_name(0)
+        info['vram_gb'] = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        # Enable FP16 for GPUs with compute capability >= 7.0 (Volta+)
+        cc = torch.cuda.get_device_capability(0)
+        info['use_fp16'] = (cc[0] >= 7)
+    return info
+
+
+HW_INFO = _detect_hardware()
+
+
 # ==================== CONFIGURATION ====================
 class Config:
-    """Configuration parameters matching the research paper"""
-    
+    """Configuration parameters — auto-tuned to the detected hardware."""
+
     # Model Selection (Table II)
-    MODEL_NAME = "microsoft/DialoGPT-medium"  # 354M params - manageable for demo
-    # For actual deployment: "microsoft/phi-2" (2.7B) or "microsoft/Phi-3.5-mini-instruct" (3.8B)
-    
+    MODEL_NAME = "microsoft/DialoGPT-medium"  # 354M params
+
     # Compression Parameters (Section IV)
     PRUNE_RATIO = 0.20              # 20% neuron pruning (structured)
     ALPHA = 0.6                      # Gradient vs activation weight (Eq. 1)
     LAMBDA = 1.5                     # QUBO penalty parameter (Eq. 2)
-    
-    # Calibration (Section IV.C)
-    NUM_CALIB_SAMPLES = 100         # Reduced for faster demo, paper uses 1000
-    
-    # Fine-tuning (Section IV.E)
-    FINE_TUNE_STEPS = 100           # Paper uses 500
-    BATCH_SIZE = 2
-    GRADIENT_ACCUM_STEPS = 2        # Effective batch size: 4
+
+    # ── Auto-tuned by hardware ──
+    if HW_INFO['has_cuda'] and HW_INFO['vram_gb'] >= 6:
+        # GPU with ≥ 6 GB VRAM → bigger batches, more calibration
+        NUM_CALIB_SAMPLES = 200
+        FINE_TUNE_STEPS   = 150
+        BATCH_SIZE        = 4
+        GRADIENT_ACCUM_STEPS = 2   # Effective batch: 8
+    elif HW_INFO['has_cuda']:
+        # Smaller GPU → moderate settings
+        NUM_CALIB_SAMPLES = 100
+        FINE_TUNE_STEPS   = 100
+        BATCH_SIZE        = 2
+        GRADIENT_ACCUM_STEPS = 2   # Effective batch: 4
+    else:
+        # CPU-only → conservative
+        NUM_CALIB_SAMPLES = 50
+        FINE_TUNE_STEPS   = 60
+        BATCH_SIZE        = 1
+        GRADIENT_ACCUM_STEPS = 4   # Effective batch: 4
+
     LEARNING_RATE = 1e-5
-    WARMUP_STEPS = 10
-    
-    # QUBO/Simulated Annealing (Section IV.D)
-    T0 = 10.0                       # Initial temperature
-    T_MIN = 0.01                    # Minimum temperature
-    ALPHA_COOLING = 0.95            # Cooling rate
-    SA_ITERATIONS_PER_TEMP = 100    # Iterations per temperature
-    MAX_SA_ITERATIONS = 400         # Total SA iterations
-    
+    WARMUP_STEPS  = 10
+
+    # QUBO / Simulated Annealing (Section IV.D)
+    T0 = 10.0
+    T_MIN = 0.01
+    ALPHA_COOLING = 0.95
+    SA_ITERATIONS_PER_TEMP = 100
+    MAX_SA_ITERATIONS = 400
+
     # Evaluation
     MAX_LENGTH = 256
-    QUALITY_THRESHOLD = 0.95        # 95% quality retention target
-    
+    QUALITY_THRESHOLD = 0.95
+
     # Quantization (Section IV.F, Table III)
     QUANT_DTYPE = torch.qint8       # INT8 quantization
-    
+
+    # Mixed precision — enabled automatically on capable GPUs
+    USE_FP16 = HW_INFO['use_fp16']
+
     # Output
     OUTPUT_DIR = "./compressed_model"
     METRICS_FILE = "compression_metrics.json"
@@ -84,6 +124,7 @@ class HybridCompressionPipeline:
         self.pruning_masks = {}
         self.metrics = OrderedDict()
         self.calib_dataset = []
+        self.hw = HW_INFO  # hardware info for downstream logic
         
         # Create output directory
         Path(Config.OUTPUT_DIR).mkdir(exist_ok=True)
@@ -94,11 +135,26 @@ class HybridCompressionPipeline:
             self.callback(message)
         print(message)
     
+    def _gpu_cleanup(self):
+        """Free unused GPU memory between heavy stages."""
+        if self.hw['has_cuda']:
+            torch.cuda.empty_cache()
+            gc.collect()
+    
     # ==================== STAGE 1: MODEL LOADING ====================
     def load_model(self):
         """Load pre-trained model and tokenizer (Section IV.B)"""
         try:
+            self._gpu_cleanup()
             self.log("📦 Loading model and tokenizer...")
+            
+            # Log detected hardware
+            if self.hw['has_cuda']:
+                self.log(f"   🖥️  GPU detected: {self.hw['gpu_name']}")
+                self.log(f"   💾 VRAM: {self.hw['vram_gb']:.1f} GB  |  FP16: {'ON' if Config.USE_FP16 else 'OFF'}")
+            else:
+                self.log(f"   🖥️  Running on CPU ({self.hw['cpu_cores']} cores, {self.hw['ram_gb']:.1f} GB RAM)")
+            self.log(f"   ⚙️  Auto-tuned: batch={Config.BATCH_SIZE}, calib={Config.NUM_CALIB_SAMPLES}, steps={Config.FINE_TUNE_STEPS}")
             
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
@@ -108,14 +164,30 @@ class HybridCompressionPipeline:
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
             
-            # Load model
-            self.model = AutoModelForCausalLM.from_pretrained(
-                Config.MODEL_NAME,
-                torch_dtype=torch.float32,  # FP32 for pruning
-                low_cpu_mem_usage=True,
-                trust_remote_code=True
-            )
-            self.model.to(self.device)
+            # Load model — attempt GPU, fall back to CPU on OOM
+            load_dtype = torch.float32  # FP32 needed for pruning accuracy
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    Config.MODEL_NAME,
+                    torch_dtype=load_dtype,
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True
+                )
+                self.model.to(self.device)
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as oom:
+                if self.hw['has_cuda']:
+                    self.log("   ⚠️  GPU out of memory — falling back to CPU")
+                    self._gpu_cleanup()
+                    self.device = torch.device('cpu')
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        Config.MODEL_NAME,
+                        torch_dtype=load_dtype,
+                        low_cpu_mem_usage=True,
+                        trust_remote_code=True
+                    )
+                else:
+                    raise oom
+            
             self.model.eval()
             
             # Calculate baseline metrics
@@ -124,6 +196,11 @@ class HybridCompressionPipeline:
             self.metrics['original_size_gb'] = self._calculate_model_size(self.model)
             self.metrics['device'] = str(self.device)
             self.metrics['model_name'] = Config.MODEL_NAME
+            
+            # Log GPU memory after loading
+            if self.hw['has_cuda'] and self.device.type == 'cuda':
+                alloc = torch.cuda.memory_allocated() / (1024**3)
+                self.log(f"   📊 GPU memory used: {alloc:.2f} / {self.hw['vram_gb']:.1f} GB")
             
             result = (
                 f"✅ Model loaded successfully\n"
@@ -205,6 +282,7 @@ class HybridCompressionPipeline:
                 encoded = {k: v.to(self.device) for k, v in encoded.items()}
                 self.calib_dataset.append(encoded)
             
+            self._gpu_cleanup()
             result = f"✅ Calibration dataset prepared: {len(self.calib_dataset)} samples"
             self.log(result)
             return True, result
@@ -252,13 +330,16 @@ class HybridCompressionPipeline:
         total_loss = 0.0
         total_tokens = 0
         
+        # Determine the device of the model dynamically
+        device = next(model.parameters()).device
+        
         batches = dataset if max_batches is None else dataset[:max_batches]
         
         with torch.no_grad():
             for batch in batches:
-                # Prepare inputs
-                input_ids = batch['input_ids']
-                attention_mask = batch.get('attention_mask', None)
+                # Prepare inputs and move to model's device
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device) if batch.get('attention_mask') is not None else None
                 
                 # Forward pass
                 outputs = model(
@@ -295,13 +376,27 @@ class HybridCompressionPipeline:
             self.importance_scores = {}
             self.model.train()  # Need gradients
             
+            # Build connection mapping: map name to its successor module
+            all_modules = list(self.model.named_modules())
+            self.successor_map = {}
+            for i, (name, module) in enumerate(all_modules):
+                if not (isinstance(module, nn.Linear) or type(module).__name__ == 'Conv1D'):
+                    continue
+                if any(x in name.lower() for x in ['mlp', 'fc', 'dense', 'ffn', 'intermediate']):
+                    for j in range(i + 1, len(all_modules)):
+                        next_name, next_module = all_modules[j]
+                        if isinstance(next_module, nn.Linear) or type(next_module).__name__ == 'Conv1D':
+                            parent_path = ".".join(name.split(".")[:-1])
+                            next_parent_path = ".".join(next_name.split(".")[:-1])
+                            if parent_path == next_parent_path:
+                                self.successor_map[name] = (next_name, next_module)
+                            break
+            
             # Identify prunable layers (FFN/MLP layers as per paper)
             prunable_layers = []
             for name, module in self.model.named_modules():
-                if isinstance(module, nn.Linear):
-                    # Target FFN layers (paper prunes 66% of parameters in FFN)
-                    if any(x in name.lower() for x in ['mlp', 'fc', 'dense', 'ffn', 'intermediate']):
-                        prunable_layers.append((name, module))
+                if name in self.successor_map:
+                    prunable_layers.append((name, module))
             
             self.log(f"   Found {len(prunable_layers)} prunable layers")
             
@@ -325,30 +420,46 @@ class HybridCompressionPipeline:
                 fwd_hook = module.register_forward_hook(save_activation)
                 bwd_hook = module.register_full_backward_hook(save_gradient)
                 
-                # Run calibration samples
-                num_samples = min(20, len(self.calib_dataset))  # Use subset for efficiency
-                
-                for batch in self.calib_dataset[:num_samples]:
-                    # Forward pass
-                    outputs = self.model(
-                        input_ids=batch['input_ids'],
-                        attention_mask=batch.get('attention_mask'),
-                        labels=batch['input_ids']
-                    )
-                    loss = outputs.loss
+                try:
+                    # Run calibration samples
+                    num_samples = min(20, len(self.calib_dataset))  # Use subset for efficiency
+                    use_amp = Config.USE_FP16 and self.device.type == 'cuda'
                     
-                    # Backward pass
-                    self.model.zero_grad()
-                    loss.backward()
-                    
-                    # Clear to prevent memory buildup
-                    if len(activations) > 100:
-                        activations = activations[-50:]
-                        gradients = gradients[-50:]
-                
-                # Remove hooks
-                fwd_hook.remove()
-                bwd_hook.remove()
+                    for batch in self.calib_dataset[:num_samples]:
+                        device = next(self.model.parameters()).device
+                        input_ids = batch['input_ids'].to(device)
+                        attn_mask = batch.get('attention_mask')
+                        attn_mask = attn_mask.to(device) if attn_mask is not None else None
+                        
+                        # Forward pass (with optional AMP for GPU users)
+                        if use_amp:
+                            with torch.cuda.amp.autocast():
+                                outputs = self.model(
+                                    input_ids=input_ids,
+                                    attention_mask=attn_mask,
+                                    labels=input_ids
+                                )
+                                loss = outputs.loss.float()  # upcast for backward
+                        else:
+                            outputs = self.model(
+                                input_ids=input_ids,
+                                attention_mask=attn_mask,
+                                labels=input_ids
+                            )
+                            loss = outputs.loss
+                        
+                        # Backward pass
+                        self.model.zero_grad()
+                        loss.backward()
+                        
+                        # Clear to prevent memory buildup
+                        if len(activations) > 100:
+                            activations = activations[-50:]
+                            gradients = gradients[-50:]
+                finally:
+                    # Remove hooks defensively
+                    fwd_hook.remove()
+                    bwd_hook.remove()
                 
                 # Compute importance score (Equation 1)
                 if gradients and activations:
@@ -368,8 +479,10 @@ class HybridCompressionPipeline:
                 # Cleanup
                 del gradients, activations
                 gc.collect()
+                self._gpu_cleanup()
             
             self.model.eval()
+            self._gpu_cleanup()
             
             result = f"✅ Importance scores computed for {len(self.importance_scores)} layers"
             self.log(result)
@@ -407,7 +520,11 @@ class HybridCompressionPipeline:
                     continue
                     
                 weight = module.weight.data
-                out_features, in_features = weight.shape
+                is_conv1d = type(module).__name__ == 'Conv1D'
+                if is_conv1d:
+                    in_features, out_features = weight.shape
+                else:
+                    out_features, in_features = weight.shape
                 total_neurons_original += out_features
                 
                 # Skip tiny layers
@@ -430,6 +547,7 @@ class HybridCompressionPipeline:
                 T = Config.T0
                 best_x = x.clone()
                 best_energy = self._qubo_energy(x, importance, K, Config.LAMBDA)
+                current_energy = best_energy
                 
                 iteration = 0
                 while T > Config.T_MIN and iteration < Config.MAX_SA_ITERATIONS:
@@ -442,11 +560,12 @@ class HybridCompressionPipeline:
                         
                         # Compute energy change
                         energy_new = self._qubo_energy(x_new, importance, K, Config.LAMBDA)
-                        delta_E = energy_new - best_energy
+                        delta_E = energy_new - current_energy
                         
                         # Accept with Metropolis criterion
                         if delta_E < 0 or random.random() < math.exp(-delta_E / T):
                             x = x_new.clone()
+                            current_energy = energy_new
                             if energy_new < best_energy:
                                 best_x = x.clone()
                                 best_energy = energy_new
@@ -461,10 +580,23 @@ class HybridCompressionPipeline:
                 neurons_pruned = out_features - neurons_kept
                 
                 if neurons_pruned > 0:
-                    # Structured pruning: remove entire neurons (rows)
-                    module.weight.data = weight[mask]
+                    # Structured pruning: remove entire neurons (rows for Linear, cols for Conv1D)
+                    if is_conv1d:
+                        module.weight.data = weight[:, mask]
+                    else:
+                        module.weight.data = weight[mask]
+                        
                     if module.bias is not None:
                         module.bias.data = module.bias.data[mask]
+                    
+                    # Adjust successor layer's input dimensions using the same mask
+                    if hasattr(self, 'successor_map') and name in self.successor_map:
+                        successor_name, successor_module = self.successor_map[name]
+                        is_succ_conv1d = type(successor_module).__name__ == 'Conv1D'
+                        if is_succ_conv1d:
+                            successor_module.weight.data = successor_module.weight.data[mask, :]
+                        else:
+                            successor_module.weight.data = successor_module.weight.data[:, mask]
                     
                     self.pruning_masks[name] = mask
                     total_neurons_pruned += neurons_pruned
@@ -513,9 +645,15 @@ class HybridCompressionPipeline:
         """
         Fine-tune to recover performance (Section IV.E)
         Uses instruction-following data with AdamW optimizer
+        Supports mixed-precision training on capable GPUs
         """
         try:
+            self._gpu_cleanup()
             self.log("🔧 Fine-tuning for performance recovery...")
+            
+            use_amp = Config.USE_FP16 and self.device.type == 'cuda'
+            if use_amp:
+                self.log("   ⚡ Mixed-precision (FP16) training enabled")
             
             # Instruction-following dataset (Alpaca-style)
             instruction_data = [
@@ -566,12 +704,15 @@ class HybridCompressionPipeline:
             )
             
             # Learning rate schedule with warmup
-            total_steps = min(Config.FINE_TUNE_STEPS, len(dataloader))
+            num_training_steps = Config.FINE_TUNE_STEPS // Config.GRADIENT_ACCUM_STEPS
             scheduler = get_linear_schedule_with_warmup(
                 optimizer,
                 num_warmup_steps=Config.WARMUP_STEPS,
-                num_training_steps=total_steps
+                num_training_steps=num_training_steps
             )
+            
+            # AMP scaler for mixed-precision training
+            scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
             
             # Training loop
             self.model.train()
@@ -584,20 +725,22 @@ class HybridCompressionPipeline:
                 # Move batch to device
                 batch = {k: v.to(self.device) for k, v in batch.items()}
                 
-                # Forward pass
-                outputs = self.model(
-                    input_ids=batch['input_ids'],
-                    attention_mask=batch.get('attention_mask'),
-                    labels=batch['input_ids']
-                )
-                loss = outputs.loss / Config.GRADIENT_ACCUM_STEPS
+                # Forward pass — with optional AMP
+                with torch.cuda.amp.autocast(enabled=use_amp):
+                    outputs = self.model(
+                        input_ids=batch['input_ids'],
+                        attention_mask=batch.get('attention_mask'),
+                        labels=batch['input_ids']
+                    )
+                    loss = outputs.loss / Config.GRADIENT_ACCUM_STEPS
                 
-                # Backward pass
-                loss.backward()
+                # Backward pass — scaled when using AMP
+                scaler.scale(loss).backward()
                 
                 # Gradient accumulation
                 if (step + 1) % Config.GRADIENT_ACCUM_STEPS == 0:
-                    optimizer.step()
+                    scaler.step(optimizer)
+                    scaler.update()
                     scheduler.step()
                     optimizer.zero_grad()
                 
@@ -609,6 +752,7 @@ class HybridCompressionPipeline:
                     self.log(f"      Step {step+1}/{Config.FINE_TUNE_STEPS}, Loss: {avg_loss:.4f}")
             
             self.model.eval()
+            self._gpu_cleanup()
             
             # Evaluate post-fine-tuning
             avg_loss = total_loss / min(Config.FINE_TUNE_STEPS, len(dataloader))
@@ -639,10 +783,14 @@ class HybridCompressionPipeline:
         Converts FP32 weights to INT8 for 4x compression
         """
         try:
+            self._gpu_cleanup()
             self.log("⚡ Applying INT8 quantization...")
             
-            # Move to CPU for quantization
+            # Move to CPU for quantization (PyTorch quantization requires CPU)
+            if self.device.type == 'cuda':
+                self.log("   Moving model to CPU for quantization...")
             self.model = self.model.cpu()
+            self._gpu_cleanup()  # free GPU VRAM now that model is on CPU
             
             # Apply dynamic quantization (weights to INT8, activations stay FP32)
             self.quantized_model = torch.quantization.quantize_dynamic(
@@ -792,447 +940,91 @@ Based on research paper methodology
             return f"❌ Generation error: {str(e)}"
 
 
-# ==================== PROFESSIONAL GUI ====================
-class CompressionGUI:
-    """Professional GUI for the compression pipeline"""
-    
-    def __init__(self, root):
-        self.root = root
-        self.pipeline = HybridCompressionPipeline(callback=self.log_message)
-        self.is_running = False
-        self.setup_ui()
+# ==================== EEL BACKEND ====================
+import eel
+
+# Initialize Eel and point it to the 'web' directory
+eel.init('web')
+
+# Instantiate the pipeline globally so Eel can interact with it
+# We wrap the log method so it forwards logs to JS
+def eel_log_callback(msg):
+    eel.ui_log(msg)()
+
+pipeline = HybridCompressionPipeline(callback=eel_log_callback)
+
+@eel.expose
+def get_sys_stats():
+    """Return real-time CPU, RAM, and GPU stats to JS."""
+    try:
+        proc = psutil.Process()
+        mem = proc.memory_info()
+        cpu = psutil.cpu_percent(interval=None)
+        ram = mem.rss / (1024**3)
+        ram_total = psutil.virtual_memory().total / (1024**3)
+        ram_pct = (ram / ram_total) * 100
         
-    def setup_ui(self):
-        """Create professional UI layout"""
-        self.root.title("LLM Compression Pipeline - Research Implementation")
-        self.root.geometry("1000x750")
-        self.root.configure(bg='#2c3e50')
-        
-        # Main container
-        main_container = tk.Frame(self.root, bg='#2c3e50')
-        main_container.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # ==================== HEADER ====================
-        header_frame = tk.Frame(main_container, bg='#34495e', relief='raised', bd=2)
-        header_frame.pack(fill='x', pady=(0, 10))
-        
-        title_label = tk.Label(
-            header_frame,
-            text="🔬 Hybrid LLM Compression Pipeline",
-            font=('Helvetica', 18, 'bold'),
-            bg='#34495e',
-            fg='#ecf0f1',
-            pady=10
-        )
-        title_label.pack()
-        
-        subtitle_label = tk.Label(
-            header_frame,
-            text="QUBO-Guided Pruning + Fine-Tuning + INT8 Quantization",
-            font=('Helvetica', 10),
-            bg='#34495e',
-            fg='#bdc3c7'
-        )
-        subtitle_label.pack(pady=(0, 10))
-        
-        # ==================== CONTROL PANEL ====================
-        control_frame = ttk.LabelFrame(main_container, text="Pipeline Controls", padding=15)
-        control_frame.pack(fill='x', pady=(0, 10))
-        
-        # Progress bar
-        self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(
-            control_frame,
-            variable=self.progress_var,
-            maximum=100,
-            mode='determinate',
-            length=400
-        )
-        self.progress_bar.pack(fill='x', pady=(0, 10))
-        
-        self.status_label = tk.Label(
-            control_frame,
-            text="Ready to start compression pipeline",
-            font=('Helvetica', 10),
-            fg='#27ae60',
-            bg='#ecf0f1'
-        )
-        self.status_label.pack(pady=(0, 10))
-        
-        # Button grid
-        button_frame = tk.Frame(control_frame, bg='#ecf0f1')
-        button_frame.pack(fill='x')
-        
-        # Define pipeline stages
-        self.stages = [
-            ("1. Load Model", self.stage_load_model, 14.3),
-            ("2. Prepare Data", self.stage_prepare_data, 28.6),
-            ("3. Baseline Metrics", self.stage_baseline, 42.9),
-            ("4. Importance Analysis", self.stage_importance, 57.1),
-            ("5. QUBO Pruning", self.stage_pruning, 71.4),
-            ("6. Fine-Tune", self.stage_finetune, 85.7),
-            ("7. Quantize", self.stage_quantize, 100.0),
-        ]
-        
-        # Create stage buttons
-        for i, (label, command, progress) in enumerate(self.stages):
-            btn = tk.Button(
-                button_frame,
-                text=label,
-                command=command,
-                font=('Helvetica', 10, 'bold'),
-                bg='#3498db',
-                fg='white',
-                activebackground='#2980b9',
-                relief='raised',
-                bd=2,
-                width=18,
-                height=2,
-                cursor='hand2'
-            )
-            btn.grid(row=i//4, column=i%4, padx=5, pady=5, sticky='ew')
-        
-        # Configure grid weights
-        for i in range(4):
-            button_frame.columnconfigure(i, weight=1)
-        
-        # Full pipeline button
-        full_pipeline_btn = tk.Button(
-            control_frame,
-            text="▶ RUN FULL PIPELINE",
-            command=self.run_full_pipeline,
-            font=('Helvetica', 12, 'bold'),
-            bg='#27ae60',
-            fg='white',
-            activebackground='#229954',
-            relief='raised',
-            bd=3,
-            height=2,
-            cursor='hand2'
-        )
-        full_pipeline_btn.pack(fill='x', pady=(10, 0))
-        
-        # ==================== METRICS DISPLAY ====================
-        metrics_frame = ttk.LabelFrame(main_container, text="Compression Metrics", padding=10)
-        metrics_frame.pack(fill='x', pady=(0, 10))
-        
-        self.metrics_text = tk.Text(
-            metrics_frame,
-            height=6,
-            font=('Courier', 9),
-            bg='#1c1c1c',
-            fg='#00ff00',
-            relief='sunken',
-            bd=2
-        )
-        self.metrics_text.pack(fill='both', expand=True)
-        self.update_metrics_display()
-        
-        # ==================== LOG CONSOLE ====================
-        log_frame = ttk.LabelFrame(main_container, text="Execution Log", padding=10)
-        log_frame.pack(fill='both', expand=True, pady=(0, 10))
-        
-        self.log_text = scrolledtext.ScrolledText(
-            log_frame,
-            wrap=tk.WORD,
-            font=('Consolas', 9),
-            bg='#1e1e1e',
-            fg='#d4d4d4',
-            relief='sunken',
-            bd=2
-        )
-        self.log_text.pack(fill='both', expand=True)
-        
-        # ==================== TEST GENERATION ====================
-        test_frame = ttk.LabelFrame(main_container, text="Test Compressed Model", padding=10)
-        test_frame.pack(fill='x')
-        
-        prompt_frame = tk.Frame(test_frame)
-        prompt_frame.pack(fill='x', pady=(0, 5))
-        
-        tk.Label(prompt_frame, text="Prompt:", font=('Helvetica', 10, 'bold')).pack(side='left', padx=(0, 10))
-        
-        self.prompt_entry = ttk.Entry(prompt_frame, font=('Helvetica', 10))
-        self.prompt_entry.insert(0, "Explain neural network compression:")
-        self.prompt_entry.pack(side='left', fill='x', expand=True, padx=(0, 10))
-        
-        generate_btn = tk.Button(
-            prompt_frame,
-            text="Generate",
-            command=self.test_generation,
-            font=('Helvetica', 10, 'bold'),
-            bg='#9b59b6',
-            fg='white',
-            activebackground='#8e44ad',
-            cursor='hand2',
-            width=12
-        )
-        generate_btn.pack(side='left')
-        
-        # Initial log message
-        self.log_message("="*80)
-        self.log_message("🚀 Hybrid LLM Compression Pipeline Initialized")
-        self.log_message("Based on: 'A Hybrid Approach to Compressing Large Language Models'")
-        self.log_message(f"Device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}")
-        self.log_message("="*80)
-    
-    # ==================== LOGGING ====================
-    def log_message(self, message):
-        """Add timestamped message to log"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.log_text.see(tk.END)
-        self.root.update_idletasks()
-    
-    def update_status(self, message, color='#27ae60'):
-        """Update status label"""
-        self.status_label.config(text=message, fg=color)
-        self.root.update_idletasks()
-    
-    def update_progress(self, value):
-        """Update progress bar"""
-        self.progress_var.set(value)
-        self.root.update_idletasks()
-    
-    def update_metrics_display(self):
-        """Update metrics display panel"""
-        self.metrics_text.delete('1.0', tk.END)
-        
-        metrics = self.pipeline.metrics
-        if not metrics:
-            self.metrics_text.insert('1.0', "No metrics available yet. Run the pipeline to see results.")
-            return
-        
-        # Format metrics display
-        display = []
-        display.append("┌─ COMPRESSION SUMMARY ─────────────────────────────────────────────┐")
-        
-        if 'original_size_gb' in metrics:
-            display.append(f"│ Original Size:      {metrics['original_size_gb']:.3f} GB")
-        if 'quantized_size_gb' in metrics:
-            display.append(f"│ Compressed Size:    {metrics['quantized_size_gb']:.3f} GB")
-        if 'compression_ratio' in metrics:
-            display.append(f"│ Compression Ratio:  {metrics['compression_ratio']:.2f}x")
-        if 'size_reduction_pct' in metrics:
-            display.append(f"│ Size Reduction:     {metrics['size_reduction_pct']:.1f}%")
-        
-        display.append("├───────────────────────────────────────────────────────────────────┤")
-        
-        if 'baseline_perplexity' in metrics:
-            display.append(f"│ Baseline PPL:       {metrics['baseline_perplexity']:.4f}")
-        if 'final_perplexity' in metrics:
-            display.append(f"│ Final PPL:          {metrics['final_perplexity']:.4f}")
-        if 'quality_retention' in metrics:
-            display.append(f"│ Quality Retention:  {metrics['quality_retention']:.1f}%")
-        
-        if 'neurons_pruned' in metrics:
-            display.append("├───────────────────────────────────────────────────────────────────┤")
-            display.append(f"│ Neurons Pruned:     {metrics['neurons_pruned']:,}")
-            display.append(f"│ Layers Pruned:      {metrics.get('layers_pruned', 0)}")
-        
-        display.append("└───────────────────────────────────────────────────────────────────┘")
-        
-        self.metrics_text.insert('1.0', '\n'.join(display))
-    
-    # ==================== STAGE EXECUTION ====================
-    def run_in_thread(self, func, stage_name, progress_value):
-        """Execute stage in separate thread"""
-        if self.is_running:
-            messagebox.showwarning("Warning", "Pipeline is already running!")
-            return
-        
-        def wrapper():
-            self.is_running = True
-            self.update_status(f"Running: {stage_name}", '#e67e22')
-            self.update_progress(progress_value)
+        gpu_pct = 0.0
+        if torch.cuda.is_available():
+            alloc = torch.cuda.memory_allocated() / (1024**3)
+            total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            gpu_pct = (alloc / total) * 100
             
-            try:
-                success, message = func()
-                if success:
-                    self.update_status(f"✓ Completed: {stage_name}", '#27ae60')
-                    self.update_metrics_display()
-                else:
-                    self.update_status(f"✗ Failed: {stage_name}", '#e74c3c')
-            except Exception as e:
-                self.log_message(f"❌ Unexpected error: {str(e)}")
-                self.update_status(f"✗ Error: {stage_name}", '#e74c3c')
-            finally:
-                self.is_running = False
+        return {'cpu': cpu, 'ram': ram_pct, 'gpu': gpu_pct}
+    except Exception:
+        return {'cpu': 0, 'ram': 0, 'gpu': 0}
+
+@eel.expose
+def get_initial_hardware():
+    """Send initial hardware configuration to JS."""
+    eel.ui_set_hardware(pipeline.hw['gpu_name'] if pipeline.hw['gpu_name'] else 'CPU', pipeline.hw['has_cuda'])()
+
+@eel.expose
+def start_pipeline():
+    """Run the entire compression pipeline sequentially and update JS."""
+    stages = [
+        (pipeline.load_model, "Load Model"),
+        (pipeline.prepare_calibration_data, "Prepare Data"),
+        (pipeline.compute_baseline_metrics, "Baseline Metrics"),
+        (pipeline.compute_importance_scores, "Importance Analysis"),
+        (pipeline.qubo_pruning, "QUBO Pruning"),
+        (pipeline.fine_tune, "Fine-Tuning"),
+        (pipeline.quantize_model, "Quantization")
+    ]
+    
+    for i, (method, name) in enumerate(stages):
+        eel.ui_set_stage(i + 1)()
+        pipeline.log(f"\n▶ Starting Stage {i + 1}: {name}")
         
-        thread = threading.Thread(target=wrapper, daemon=True)
-        thread.start()
-    
-    def stage_load_model(self):
-        self.run_in_thread(self.pipeline.load_model, "Load Model", 14.3)
-    
-    def stage_prepare_data(self):
-        self.run_in_thread(self.pipeline.prepare_calibration_data, "Prepare Data", 28.6)
-    
-    def stage_baseline(self):
-        self.run_in_thread(self.pipeline.compute_baseline_metrics, "Baseline Metrics", 42.9)
-    
-    def stage_importance(self):
-        self.run_in_thread(self.pipeline.compute_importance_scores, "Importance Analysis", 57.1)
-    
-    def stage_pruning(self):
-        self.run_in_thread(self.pipeline.qubo_pruning, "QUBO Pruning", 71.4)
-    
-    def stage_finetune(self):
-        self.run_in_thread(self.pipeline.fine_tune, "Fine-Tuning", 85.7)
-    
-    def stage_quantize(self):
-        self.run_in_thread(self.pipeline.quantize_model, "Quantization", 100.0)
-    
-    # ==================== FULL PIPELINE ====================
-    def run_full_pipeline(self):
-        """Execute complete compression pipeline"""
-        if self.is_running:
-            messagebox.showwarning("Warning", "Pipeline is already running!")
+        try:
+            success, msg = method()
+            if not success:
+                pipeline.log(f"❌ Pipeline stopped at: {name}")
+                eel.ui_set_error(f"Failed at {name}: {msg}")()
+                return
+        except Exception as e:
+            pipeline.log(f"❌ Unexpected Error in {name}: {str(e)}")
+            eel.ui_set_error(f"Error in {name}: {str(e)}")()
             return
-        
-        # Confirm
-        response = messagebox.askyesno(
-            "Run Full Pipeline",
-            "This will run all 7 stages of the compression pipeline.\n"
-            "This may take 15-30 minutes depending on your hardware.\n\n"
-            "Continue?"
-        )
-        
-        if not response:
-            return
-        
-        def run_all_stages():
-            self.is_running = True
-            start_time = time.time()
-            
-            self.log_message("\n" + "="*80)
-            self.log_message("🚀 STARTING FULL COMPRESSION PIPELINE")
-            self.log_message("="*80 + "\n")
-            
-            # Execute all stages
-            for i, (label, command, progress) in enumerate(self.stages):
-                stage_name = label.split('. ')[1]
-                self.log_message(f"\n{'─'*80}")
-                self.log_message(f"▶ Stage {i+1}/7: {stage_name}")
-                self.log_message(f"{'─'*80}")
-                
-                self.update_status(f"Stage {i+1}/7: {stage_name}", '#e67e22')
-                self.update_progress(progress)
-                
-                # Get the actual pipeline method
-                method_map = {
-                    "Load Model": self.pipeline.load_model,
-                    "Prepare Data": self.pipeline.prepare_calibration_data,
-                    "Baseline Metrics": self.pipeline.compute_baseline_metrics,
-                    "Importance Analysis": self.pipeline.compute_importance_scores,
-                    "QUBO Pruning": self.pipeline.qubo_pruning,
-                    "Fine-Tune": self.pipeline.fine_tune,
-                    "Quantize": self.pipeline.quantize_model,
-                }
-                
-                method = method_map[stage_name]
-                
-                try:
-                    success, message = method()
-                    if not success:
-                        self.log_message(f"\n❌ Pipeline stopped at stage: {stage_name}")
-                        self.update_status(f"Failed at: {stage_name}", '#e74c3c')
-                        break
-                    
-                    self.update_metrics_display()
-                    time.sleep(1)  # Brief pause between stages
-                    
-                except Exception as e:
-                    self.log_message(f"\n❌ Error in stage {stage_name}: {str(e)}")
-                    self.update_status(f"Error at: {stage_name}", '#e74c3c')
-                    break
-            else:
-                # All stages completed successfully
-                elapsed_time = time.time() - start_time
-                self.log_message("\n" + "="*80)
-                self.log_message("🎉 PIPELINE COMPLETED SUCCESSFULLY!")
-                self.log_message(f"Total time: {elapsed_time/60:.1f} minutes")
-                self.log_message("="*80 + "\n")
-                
-                self.update_status("✓ All stages completed successfully!", '#27ae60')
-                self.update_progress(100)
-                
-                # Show completion dialog
-                messagebox.showinfo(
-                    "Success",
-                    f"Compression pipeline completed!\n\n"
-                    f"Time: {elapsed_time/60:.1f} minutes\n"
-                    f"Compressed model saved to: {Config.OUTPUT_DIR}\n\n"
-                    f"Check the metrics panel for results."
-                )
-            
-            self.is_running = False
-        
-        # Run in thread
-        thread = threading.Thread(target=run_all_stages, daemon=True)
-        thread.start()
-    
-    # ==================== TEST GENERATION ====================
-    def test_generation(self):
-        """Test the compressed model with user prompt"""
-        if self.pipeline.quantized_model is None:
-            messagebox.showwarning(
-                "Model Not Ready",
-                "Please complete the compression pipeline first!"
-            )
-            return
-        
-        prompt = self.prompt_entry.get().strip()
-        if not prompt:
-            messagebox.showwarning("Empty Prompt", "Please enter a prompt!")
-            return
-        
-        self.log_message(f"\n{'─'*80}")
-        self.log_message(f"🤖 Generating response for: '{prompt}'")
-        self.log_message(f"{'─'*80}")
-        
-        def generate():
-            self.update_status("Generating...", '#9b59b6')
-            response = self.pipeline.generate_text(prompt, max_new_tokens=50)
-            self.log_message(f"Response: {response}\n")
-            self.update_status("Generation complete", '#27ae60')
-        
-        thread = threading.Thread(target=generate, daemon=True)
-        thread.start()
+
+    # Pipeline Complete
+    eel.ui_set_complete(pipeline.metrics)()
 
 
 # ==================== MAIN ====================
 def main():
-    """Launch the application"""
-    root = tk.Tk()
-    app = CompressionGUI(root)
+    """Launch the Eel Desktop Application."""
+    print("=" * 64)
+    print("  Qunart — Hybrid LLM Compression Desktop App")
+    print("=" * 64)
+    print("\nStarting App UI...")
     
-    # Center window on screen
-    root.update_idletasks()
-    width = root.winfo_width()
-    height = root.winfo_height()
-    x = (root.winfo_screenwidth() // 2) - (width // 2)
-    y = (root.winfo_screenheight() // 2) - (height // 2)
-    root.geometry(f'{width}x{height}+{x}+{y}')
-    
-    # Handle window close
-    def on_closing():
-        if app.is_running:
-            if messagebox.askokcancel("Quit", "Pipeline is running. Are you sure you want to quit?"):
-                root.destroy()
-        else:
-            root.destroy()
-    
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-    
-    # Start GUI
-    root.mainloop()
-
+    # Start Eel (opens a Chrome/Edge window in App mode)
+    try:
+        eel.start('index.html', mode='chrome', size=(1100, 720), port=0)
+    except EnvironmentError:
+        # Fallback to Edge or default browser if Chrome isn't found
+        eel.start('index.html', mode='edge', size=(1100, 720), port=0)
 
 if __name__ == "__main__":
-    print("="*80)
-    print("Hybrid LLM Compression Pipeline")
-    print("Research Implementation")
-    print("="*80)
-    print("\nStarting GUI...")
     main()

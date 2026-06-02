@@ -1,0 +1,6 @@
+venv_gpu/
+build/
+dist/
+__pycache__/
+*.spec
+*.pyc

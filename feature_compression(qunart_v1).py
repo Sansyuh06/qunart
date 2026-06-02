@@ -148,9 +148,19 @@ class QuantumOptimizer:
             params = sample[:self.dimension] * 2 * np.pi
             qc = self.feature_map.assign_parameters(params)
             
-            # Simulate quantum measurement
-            return abs(np.mean(np.cos(params)) * np.exp(-np.var(sample)))
-        except:
+            # Execute the quantum circuit on StatevectorEstimator
+            from qiskit.quantum_info import SparsePauliOp
+            observable = SparsePauliOp("Z" * self.dimension)
+            job = self.estimator.run([(qc, observable)])
+            result = job.result()
+            pub_result = result[0]
+            evs = pub_result.data.evs
+            if hasattr(evs, "__len__"):
+                score = abs(float(evs[0]))
+            else:
+                score = abs(float(evs))
+            return score
+        except Exception as e:
             return self._classical_score(feature_data, None)
     
     def _classical_score(self, feature_data: np.ndarray, y: np.ndarray = None) -> float:
@@ -243,8 +253,16 @@ class CompressionEngine:
         X_scaled = self.scaler.fit_transform(X)
         
         # Encode target if needed
-        if y.dtype == object or len(np.unique(y)) < 0.1 * len(y):
-            y = self.label_encoder.fit_transform(y)
+        is_already_clean_int = False
+        if np.issubdtype(y.dtype, np.integer):
+            unique_vals = np.sort(np.unique(y))
+            if np.array_equal(unique_vals, np.arange(len(unique_vals))):
+                is_already_clean_int = True
+        
+        if not is_already_clean_int:
+            is_string_or_object = (y.dtype == object) or any(isinstance(val, str) for val in y[:100])
+            if is_string_or_object:
+                y = self.label_encoder.fit_transform(y)
         
         return X_scaled, y
     
@@ -283,7 +301,11 @@ class CompressionEngine:
             for i, var_ratio in enumerate(pca.explained_variance_ratio_[:n_features]):
                 scores[f"feature_{i}"] = var_ratio if i < len(pca.explained_variance_ratio_) else 0.0
             
-            selected_features = [f"feature_{i}" for i in range(n_components)]
+            # Populate scores for the remaining features
+            for i in range(n_components, n_features):
+                scores[f"feature_{i}"] = 0.0
+            
+            selected_features = [f"pca_component_{i}" for i in range(n_components)]
             
         else:  # Default to correlation-based selection
             for i in range(n_features):
@@ -304,15 +326,20 @@ class CompressionEngine:
         
         # Simulate model performance
         try:
-            feature_indices = [int(f.split('_')[1]) for f in selected_features if f.startswith('feature_')]
-            X_compressed = X[:, feature_indices] if feature_indices else X[:, :compressed_features]
+            if selected_features and selected_features[0].startswith('pca_component_'):
+                from sklearn.decomposition import PCA
+                pca = PCA(n_components=compressed_features)
+                X_compressed = pca.fit_transform(X)
+            else:
+                feature_indices = [int(f.split('_')[1]) for f in selected_features if f.startswith('feature_')]
+                X_compressed = X[:, feature_indices] if feature_indices else X[:, :compressed_features]
             
             X_train, X_test, y_train, y_test = train_test_split(X_compressed, y, test_size=0.2, random_state=42)
             model = RandomForestClassifier(n_estimators=50, random_state=42)
             model.fit(X_train, y_train)
             accuracy = accuracy_score(y_test, model.predict(X_test))
             accuracy_drop = max(0, 0.95 - accuracy)  # Assume original had 95% accuracy
-        except:
+        except Exception as e:
             accuracy_drop = 0.1  # Default assumption
         
         compression_ratio = compressed_features / original_features
@@ -685,6 +712,7 @@ class HamerspaceGUI:
     def update_hardware_info(self, event=None):
         """Update hardware profile information"""
         try:
+            self.hardware_info.configure(state='normal')
             profile = HardwareProfile[self.hardware_var.get()]
             specs = profile.value
             
@@ -698,9 +726,13 @@ Architecture: {specs['arch'].upper()}"""
             
             self.hardware_info.delete(1.0, tk.END)
             self.hardware_info.insert(1.0, info_text)
-            self.hardware_info.configure(state='disabled')
         except Exception as e:
             pass
+        finally:
+            try:
+                self.hardware_info.configure(state='disabled')
+            except:
+                pass
     
     def compress_pipeline(self):
         """Main compression function"""
@@ -991,19 +1023,26 @@ Architecture: {specs['arch'].upper()}"""
                 y = self.current_data['y']
                 
                 # Get selected features
-                feature_indices = []
-                for feature in latest_result.selected_features:
-                    if feature.startswith('feature_'):
-                        idx = int(feature.split('_')[1])
-                        if idx < len(X.columns):
-                            feature_indices.append(idx)
-                    elif feature in X.columns:
-                        feature_indices.append(X.columns.get_loc(feature))
-                
-                if not feature_indices:
+                is_pca = latest_result.selected_features and latest_result.selected_features[0].startswith('pca_component_')
+                if is_pca:
+                    from sklearn.decomposition import PCA
+                    pca = PCA(n_components=len(latest_result.selected_features))
+                    X_compressed = pd.DataFrame(pca.fit_transform(X), columns=latest_result.selected_features)
                     feature_indices = list(range(len(latest_result.selected_features)))
-                
-                X_compressed = X.iloc[:, feature_indices]
+                else:
+                    feature_indices = []
+                    for feature in latest_result.selected_features:
+                        if feature.startswith('feature_'):
+                            idx = int(feature.split('_')[1])
+                            if idx < len(X.columns):
+                                feature_indices.append(idx)
+                        elif feature in X.columns:
+                            feature_indices.append(X.columns.get_loc(feature))
+                    
+                    if not feature_indices:
+                        feature_indices = list(range(len(latest_result.selected_features)))
+                    
+                    X_compressed = X.iloc[:, feature_indices]
                 
                 # Train final model
                 model = RandomForestClassifier(n_estimators=100, random_state=42)
