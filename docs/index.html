@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qunart | Hybrid Quantum-Classical LLM Compression</title>
+    <meta name="description" content="A breakthrough hybrid framework for compressing large language models using quantum-inspired simulated annealing.">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Background Canvas for Interactive Particles -->
+    <canvas id="bg-canvas"></canvas>
+
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="brand">
+                <div class="logo-box"><i class="fa-solid fa-atom"></i></div>
+                <span class="brand-text">QUNART</span>
+            </div>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#architecture">Architecture</a>
+                <a href="#metrics">Metrics</a>
+                <a href="#download" class="btn-primary-outline">Get Desktop App</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <header class="hero">
+        <div class="hero-content">
+            <div class="badge">Research Project</div>
+            <h1 class="hero-title">
+                Compress LLMs with <br>
+                <span class="gradient-text">Quantum-Inspired</span> Precision.
+            </h1>
+            <p class="hero-subtitle">
+                Qunart is a hybrid framework that utilizes Quadratic Unconstrained Binary Optimization (QUBO) and simulated annealing to aggressively prune and quantize Large Language Models with near-zero knowledge loss.
+            </p>
+            <div class="hero-actions">
+                <a href="#download" class="btn-primary">
+                    <i class="fa-solid fa-download"></i> Download Windows App
+                </a>
+                <a href="https://github.com/Sansyuh06/qunart" target="_blank" class="btn-secondary">
+                    <i class="fa-brands fa-github"></i> View Source
+                </a>
+            </div>
+        </div>
+        
+        <!-- Code visualization mock -->
+        <div class="hero-visual">
+            <div class="glass-terminal">
+                <div class="terminal-header">
+                    <span class="dot red"></span>
+                    <span class="dot yellow"></span>
+                    <span class="dot green"></span>
+                    <span class="title">qunart_pipeline.py</span>
+                </div>
+                <div class="terminal-body">
+                    <pre><code><span class="keyword">def</span> <span class="function">qubo_pruning</span>(self):
+    <span class="comment"># Constructing QUBO matrix for simulated annealing</span>
+    Q = np.zeros((num_neurons, num_neurons))
+    <span class="keyword">for</span> i <span class="keyword">in</span> range(num_neurons):
+        Q[i,i] = -importance_scores[i] + lambda_val * (1 - 2*target_K)
+        <span class="keyword">for</span> j <span class="keyword">in</span> range(i+1, num_neurons):
+            Q[i,j] = 2 * lambda_val
+            
+    <span class="comment"># Solving via simulated annealing solver</span>
+    best_config = self._run_sa_sampler(Q)
+    <span class="keyword">return</span> self._apply_mask(best_config)</code></pre>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Features Section -->
+    <section id="features" class="section">
+        <div class="section-header">
+            <h2>The Qunart Pipeline</h2>
+            <p>A multi-stage optimization process designed to maximize parameter reduction while preserving model perplexity.</p>
+        </div>
+        
+        <div class="grid-3">
+            <div class="glass-card feature-card">
+                <div class="icon-wrapper blue">
+                    <i class="fa-solid fa-magnifying-glass-chart"></i>
+                </div>
+                <h3>Importance Analysis</h3>
+                <p>Dynamically computes parameter importance using a hybrid metric of real gradient norms and activation standard deviations hooked directly from PyTorch.</p>
+            </div>
+            
+            <div class="glass-card feature-card">
+                <div class="icon-wrapper green">
+                    <i class="fa-solid fa-network-wired"></i>
+                </div>
+                <h3>QUBO Simulated Annealing</h3>
+                <p>Maps the pruning objective to a Quadratic Unconstrained Binary Optimization problem, solved via advanced simulated annealing to find the optimal global sparsity mask.</p>
+            </div>
+            
+            <div class="glass-card feature-card">
+                <div class="icon-wrapper purple">
+                    <i class="fa-solid fa-bolt"></i>
+                </div>
+                <h3>Dynamic INT8 Quantization</h3>
+                <p>Post-pruning fine-tuning combined with dynamic INT8 weight quantization aggressively compresses the final memory footprint, perfect for consumer GPUs.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Metrics Section -->
+    <section id="metrics" class="section dark-bg">
+        <div class="section-header">
+            <h2>Proven Optimization Metrics</h2>
+            <p>Evaluated on the DialoGPT-medium transformer using the COCO Calibration Dataset.</p>
+        </div>
+        
+        <div class="grid-4 metrics-grid">
+            <div class="metric-item">
+                <div class="metric-val text-blue">4.12x</div>
+                <div class="metric-label">Compression Ratio</div>
+            </div>
+            <div class="metric-item">
+                <div class="metric-val text-green">94.3%</div>
+                <div class="metric-label">Quality Retention</div>
+            </div>
+            <div class="metric-item">
+                <div class="metric-val text-purple">25 GB</div>
+                <div class="metric-label">Calibration Dataset</div>
+            </div>
+            <div class="metric-item">
+                <div class="metric-val text-cyan">INT8</div>
+                <div class="metric-label">Target Precision</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Download Section -->
+    <section id="download" class="section">
+        <div class="download-container glass-card">
+            <div class="download-content">
+                <h2>Ready to compress your models?</h2>
+                <p>Download the fully-packaged Windows Desktop App. Features real-time hardware telemetry and a stunning native GUI.</p>
+                <div class="sys-reqs">
+                    <span><i class="fa-brands fa-windows"></i> Windows 10/11</span>
+                    <span><i class="fa-solid fa-microchip"></i> CPU or NVIDIA GPU (CUDA)</span>
+                </div>
+                <a href="https://github.com/Sansyuh06/qunart/releases" class="btn-primary large mt-4">
+                    <i class="fa-solid fa-download"></i> Download v1.0 (.exe)
+                </a>
+            </div>
+            <div class="download-image">
+                <div class="app-mockup">
+                    <div class="mockup-header">
+                        <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                    </div>
+                    <div class="mockup-body">
+                        <div class="mock-sidebar"></div>
+                        <div class="mock-content">
+                            <div class="mock-banner"></div>
+                            <div class="mock-grid">
+                                <div class="mock-box"></div>
+                                <div class="mock-box tall"></div>
+                                <div class="mock-box"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-content">
+            <div class="brand">
+                <img src="Untitled-2.png" alt="SANEICS Logo" class="footer-logo">
+                <span class="brand-text">QUNART</span>
+            </div>
+            <p>Developed by Saneics. A Hybrid Quantum-Classical Framework for AI Compression.</p>
+            <div class="socials">
+                <a href="https://github.com/Sansyuh06/qunart"><i class="fa-brands fa-github"></i></a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Script -->
+    <script src="script.js"></script>
+</body>
+</html>
