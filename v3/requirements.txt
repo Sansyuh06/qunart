@@ -1,0 +1,22 @@
+torch>=2.0
+transformers>=4.40
+accelerate>=0.20
+peft>=0.5
+bitsandbytes>=0.43
+datasets>=2.0
+scipy
+numpy
+tqdm
+safetensors
+huggingface-hub
+sentencepiece
+protobuf
+optimum[onnxruntime]
+onnxruntime
+
+# GUI
+customtkinter>=5.2
+Pillow>=9.0
+
+# optional: dwave-neal for a real QUBO simulated-annealing solver
+# dwave-neal>=0.6
