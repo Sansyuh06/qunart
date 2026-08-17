@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE gowin-synthesis-project>
+<Project>
+    <Version>beta</Version>
+    <Device id="GW1NR-9C" package="QFN88P" speed="6" partNumber="GW1NR-LV9QN88PC6/I5"/>
+    <FileList>
+        <File path="D:\fyeshi\project\quantum\quantum server\rtl\top.v" type="verilog"/>
+        <File path="D:\fyeshi\project\quantum\quantum server\rtl\bdh_led_chaser.v" type="verilog"/>
+        <File path="D:\fyeshi\project\quantum\quantum server\rtl\bdh_fsm.v" type="verilog"/>
+        <File path="D:\fyeshi\project\quantum\quantum server\rtl\bdh_mac_dsp.v" type="verilog"/>
+        <File path="D:\fyeshi\project\quantum\quantum server\rtl\bdh_zero_skipper.v" type="verilog"/>
+        <File path="D:\fyeshi\project\quantum\quantum server\rtl\uart_rx.v" type="verilog"/>
+        <File path="D:\fyeshi\project\quantum\quantum server\rtl\uart_tx.v" type="verilog"/>
+    </FileList>
+    <OptionList>
+        <Option type="disable_insert_pad" value="0"/>
+        <Option type="dsp_style" value="auto"/>
+        <Option type="global_freq" value="50.000"/>
+        <Option type="looplimit" value="2000"/>
+        <Option type="map_option" value="1"/>
+        <Option type="max_fanout" value="1000"/>
+        <Option type="netlist_hierarchy" value="1"/>
+        <Option type="opt_goal" value="auto"/>
+        <Option type="output_file" value="D:\fyeshi\project\quantum\quantum server\rtl\impl\gwsynthesis\bdh_accelerator.vg"/>
+        <Option type="print_all_synthesis_warning" value="0"/>
+        <Option type="ram_rw_check" value="0"/>
+        <Option type="ram_style" value="auto"/>
+        <Option type="rom_style" value="auto"/>
+        <Option type="shift_reg" value="auto"/>
+        <Option type="vcc" value="1.2"/>
+        <Option type="verilog_language" value="verilog-2001"/>
+        <Option type="vhdl_language" value="vhdl-1993"/>
+    </OptionList>
+</Project>

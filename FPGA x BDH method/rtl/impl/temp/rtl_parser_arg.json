@@ -1,0 +1,40 @@
+{
+    "Device": "GW1NR-9C",
+    "Files": [
+        {
+            "Path": "D:/fyeshi/project/quantum/quantum server/rtl/top.v",
+            "Type": "verilog"
+        },
+        {
+            "Path": "D:/fyeshi/project/quantum/quantum server/rtl/bdh_led_chaser.v",
+            "Type": "verilog"
+        },
+        {
+            "Path": "D:/fyeshi/project/quantum/quantum server/rtl/bdh_fsm.v",
+            "Type": "verilog"
+        },
+        {
+            "Path": "D:/fyeshi/project/quantum/quantum server/rtl/bdh_mac_dsp.v",
+            "Type": "verilog"
+        },
+        {
+            "Path": "D:/fyeshi/project/quantum/quantum server/rtl/bdh_zero_skipper.v",
+            "Type": "verilog"
+        },
+        {
+            "Path": "D:/fyeshi/project/quantum/quantum server/rtl/uart_rx.v",
+            "Type": "verilog"
+        },
+        {
+            "Path": "D:/fyeshi/project/quantum/quantum server/rtl/uart_tx.v",
+            "Type": "verilog"
+        }
+    ],
+    "IncludePath": [
+    ],
+    "LoopLimit": 2000,
+    "ResultFile": "D:/fyeshi/project/quantum/quantum server/rtl/impl/temp/rtl_parser.result",
+    "Top": "",
+    "VerilogStd": "verilog_2001",
+    "VhdlStd": "vhdl_93"
+}
