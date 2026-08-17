@@ -60,14 +60,16 @@ class LlamaWidthPruner(BasePruner):
 
         # --- embeddings ---
         model.model.embed_tokens.weight.data = model.model.embed_tokens.weight.data[:, : self.new_h]
-        if model.model.embed_tokens.bias is not None:
+        model.model.embed_tokens.embedding_dim = self.new_h
+        if getattr(model.model.embed_tokens, "bias", None) is not None:
             model.model.embed_tokens.bias.data = model.model.embed_tokens.bias.data[: self.new_h]
 
         # --- lm head (if not tied) ---
         if hasattr(model, "lm_head") and not config.tie_word_embeddings:
             model.lm_head.weight.data = model.lm_head.weight.data[:, : self.new_h]
-            if model.lm_head.bias is not None:
-                model.lm_head.bias.data = model.lm_head.bias.data[: self.new_h]
+            model.lm_head.in_features = self.new_h
+            if getattr(model.lm_head, "bias", None) is not None:
+                model.lm_head.bias.data = model.lm_head.bias.data[: model.lm_head.out_features]
 
         # --- layers ---
         for layer in model.model.layers:
@@ -88,7 +90,7 @@ class LlamaWidthPruner(BasePruner):
             for proj in (attn.q_proj, attn.k_proj, attn.v_proj, attn.o_proj):
                 proj.out_features = proj.weight.size(0)
                 proj.in_features = proj.weight.size(1)
-                if proj.bias is not None:
+                if getattr(proj, "bias", None) is not None:
                     proj.bias.data = proj.bias.data[: proj.out_features]
 
             attn.num_heads = new_num_heads
@@ -100,6 +102,12 @@ class LlamaWidthPruner(BasePruner):
             # mlp: use QUBO to select which neurons survive, then slice
             mlp = layer.mlp
             self._prune_mlp(mlp)
+
+        # --- final layer norm ---
+        if hasattr(model.model, "norm"):
+            model.model.norm.weight.data = model.model.norm.weight.data[: self.new_h]
+            if getattr(model.model.norm, "bias", None) is not None:
+                model.model.norm.bias.data = model.model.norm.bias.data[: self.new_h]
 
         # --- update config ---
         config.hidden_size = self.new_h
@@ -118,17 +126,19 @@ class LlamaWidthPruner(BasePruner):
             mlp.up_proj.weight.data,
             mlp.down_proj.weight.data,
         )
-        keep = self.qubo.solve(importances, target_i)
+        gate_np = mlp.gate_proj.weight.data.detach().cpu().to(torch.float32).numpy()
+        up_np = mlp.up_proj.weight.data.detach().cpu().to(torch.float32).numpy()
+        keep = self.qubo.solve(importances, target_i, gate_weights=gate_np, up_weights=up_np)
         keep = torch.tensor(keep, device=mlp.gate_proj.weight.device, dtype=torch.long)
 
-        mlp.gate_proj.weight.data = mlp.gate_proj.weight.data[keep]
-        mlp.up_proj.weight.data = mlp.up_proj.weight.data[keep]
-        mlp.down_proj.weight.data = mlp.down_proj.weight.data[:, keep]
+        mlp.gate_proj.weight.data = mlp.gate_proj.weight.data[keep][:, : self.new_h]
+        mlp.up_proj.weight.data = mlp.up_proj.weight.data[keep][:, : self.new_h]
+        mlp.down_proj.weight.data = mlp.down_proj.weight.data[: self.new_h][:, keep]
 
         for proj in (mlp.gate_proj, mlp.up_proj, mlp.down_proj):
             proj.out_features = proj.weight.size(0)
             proj.in_features = proj.weight.size(1)
-            if proj.bias is not None:
+            if getattr(proj, "bias", None) is not None:
                 proj.bias.data = proj.bias.data[: proj.out_features]
 
 
@@ -181,14 +191,16 @@ class Phi3WidthPruner(BasePruner):
 
         # --- embeddings ---
         model.model.embed_tokens.weight.data = model.model.embed_tokens.weight.data[:, : self.new_h]
-        if model.model.embed_tokens.bias is not None:
+        model.model.embed_tokens.embedding_dim = self.new_h
+        if getattr(model.model.embed_tokens, "bias", None) is not None:
             model.model.embed_tokens.bias.data = model.model.embed_tokens.bias.data[: self.new_h]
 
         # --- lm head (if not tied) ---
         if hasattr(model, "lm_head") and not config.tie_word_embeddings:
             model.lm_head.weight.data = model.lm_head.weight.data[:, : self.new_h]
-            if model.lm_head.bias is not None:
-                model.lm_head.bias.data = model.lm_head.bias.data[: self.new_h]
+            model.lm_head.in_features = self.new_h
+            if getattr(model.lm_head, "bias", None) is not None:
+                model.lm_head.bias.data = model.lm_head.bias.data[: model.lm_head.out_features]
 
         # --- layers ---
         for layer in model.model.layers:
@@ -212,13 +224,13 @@ class Phi3WidthPruner(BasePruner):
             attn.qkv_proj.weight.data = new_qkv
             attn.qkv_proj.out_features = new_qkv.size(0)
             attn.qkv_proj.in_features = self.new_h
-            if attn.qkv_proj.bias is not None:
+            if getattr(attn.qkv_proj, "bias", None) is not None:
                 attn.qkv_proj.bias.data = attn.qkv_proj.bias.data[: new_qkv.size(0)]
 
             attn.o_proj.weight.data = attn.o_proj.weight.data[: self.new_h, :new_q_dim]
             attn.o_proj.out_features = self.new_h
             attn.o_proj.in_features = new_q_dim
-            if attn.o_proj.bias is not None:
+            if getattr(attn.o_proj, "bias", None) is not None:
                 attn.o_proj.bias.data = attn.o_proj.bias.data[: self.new_h]
 
             attn.num_heads = new_num_heads
@@ -229,6 +241,12 @@ class Phi3WidthPruner(BasePruner):
             # mlp
             mlp = layer.mlp
             self._prune_phi3_mlp(mlp, old_i)
+
+        # --- final layer norm ---
+        if hasattr(model.model, "norm"):
+            model.model.norm.weight.data = model.model.norm.weight.data[: self.new_h]
+            if getattr(model.model.norm, "bias", None) is not None:
+                model.model.norm.bias.data = model.model.norm.bias.data[: self.new_h]
 
         # --- update config ---
         config.hidden_size = self.new_h
@@ -253,21 +271,23 @@ class Phi3WidthPruner(BasePruner):
             + up.norm(dim=1).cpu().numpy()
             + down.norm(dim=0).cpu().numpy()
         )
-        keep = self.qubo.solve(importances, target_i)
+        gate_np = gate.detach().cpu().to(torch.float32).numpy()
+        up_np = up.detach().cpu().to(torch.float32).numpy()
+        keep = self.qubo.solve(importances, target_i, gate_weights=gate_np, up_weights=up_np)
         keep = torch.tensor(keep, device=gate_up.device, dtype=torch.long)
 
-        new_gate = gate[keep]
-        new_up = up[keep]
-        new_down = down[:, keep]
+        new_gate = gate[keep][:, : self.new_h]
+        new_up = up[keep][:, : self.new_h]
+        new_down = down[: self.new_h][:, keep]
 
         mlp.gate_up_proj.weight.data = torch.cat([new_gate, new_up], dim=0)
         mlp.gate_up_proj.out_features = 2 * target_i
         mlp.gate_up_proj.in_features = self.new_h
-        if mlp.gate_up_proj.bias is not None:
+        if getattr(mlp.gate_up_proj, "bias", None) is not None:
             mlp.gate_up_proj.bias.data = mlp.gate_up_proj.bias.data[: 2 * target_i]
 
         mlp.down_proj.weight.data = new_down
         mlp.down_proj.out_features = self.new_h
         mlp.down_proj.in_features = target_i
-        if mlp.down_proj.bias is not None:
+        if getattr(mlp.down_proj, "bias", None) is not None:
             mlp.down_proj.bias.data = mlp.down_proj.bias.data[: self.new_h]

@@ -1,15 +1,10 @@
 from typing import Optional
 
 import torch
-from datasets import load_dataset
 from peft import LoraConfig, TaskType, get_peft_model
-from transformers import (
-    DataCollatorForLanguageModeling,
-    Trainer,
-    TrainingArguments,
-)
 
 from .config import CompressionTarget
+
 
 
 def attach_lora(model, target: CompressionTarget):
@@ -47,6 +42,13 @@ def finetune(
     dataset_name: Optional[str] = None,
 ):
     """Lightweight recovery fine-tune on an instruction-style corpus."""
+    from datasets import load_dataset
+    from transformers import (
+        DataCollatorForLanguageModeling,
+        Trainer,
+        TrainingArguments,
+    )
+
     dataset_name = dataset_name or target.recovery_dataset
 
     print(f"Loading recovery dataset: {dataset_name} ...")

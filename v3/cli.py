@@ -8,7 +8,9 @@ def main():
         description="Qunart v2: compress any Hugging Face LLM to a target size."
     )
     parser.add_argument("--model", required=True, help="HF model id or local path")
-    parser.add_argument("--output", required=True, help="Directory to save compressed model")
+    parser.add_argument(
+        "--output", default=None, help="Directory to save compressed model"
+    )
     parser.add_argument(
         "--target-params", type=int, default=None, help="Target parameter count"
     )
@@ -26,6 +28,24 @@ def main():
     )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dataset", default="yahma/alpaca-cleaned")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print compression plan and exit"
+    )
+    parser.add_argument(
+        "--export", choices=["hf", "gguf", "onnx"], default="hf", help="Export format"
+    )
+    parser.add_argument(
+        "--selection-method",
+        choices=["greedy", "qubo"],
+        default="greedy",
+        help="Neuron selection method",
+    )
+    parser.add_argument(
+        "--lambda-redundancy",
+        type=float,
+        default=0.1,
+        help="Redundancy penalty weight for QUBO",
+    )
 
     args = parser.parse_args()
 
@@ -44,10 +64,25 @@ def main():
         torch_dtype=args.torch_dtype,
         device=args.device,
         recovery_dataset=args.dataset,
+        selection_method=args.selection_method,
+        lambda_redundancy=args.lambda_redundancy,
     )
 
     pipeline = CompressionPipeline(target)
-    pipeline.run(args.model, args.output, dataset_name=args.dataset)
+
+    if args.dry_run:
+        pipeline.dry_run(args.model)
+        return
+
+    if not args.output:
+        raise ValueError("Specify --output directory")
+
+    pipeline.run(
+        args.model,
+        args.output,
+        dataset_name=args.dataset,
+        export_format=args.export,
+    )
 
 
 if __name__ == "__main__":

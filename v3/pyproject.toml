@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "qunart"
+version = "0.3.0"
+description = "Universal LLM compression framework — target a size budget, not a sparsity ratio"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Sansyuh06"}]
+
+dependencies = [
+    "torch>=2.0",
+    "transformers>=4.40",
+    "peft>=0.10",
+    "datasets",
+    "accelerate",
+    "safetensors",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+qubo = [
+    "dwave-neal",
+]
+export = [
+    "optimum",
+]
+eval = [
+    "lm-eval",
+]
+
+[project.scripts]
+qunart = "cli:main"
+
+[tool.setuptools.packages.find]
+include = ["qunart*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

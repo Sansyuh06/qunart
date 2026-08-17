@@ -400,19 +400,44 @@ class QunartApp(ctk.CTk):
         self.device.set("auto")
         self.device.grid(row=3, column=3, sticky="ew", padx=8, pady=2)
 
-        # --- Start button ---
+        # Export format
+        ctk.CTkLabel(grid, text="Export Format", font=ctk.CTkFont(size=12)).grid(row=4, column=0, sticky="w", padx=8, pady=14)
+        self.export_format = ctk.CTkOptionMenu(grid, values=["hf", "gguf", "onnx"], font=ctk.CTkFont(size=13))
+        self.export_format.set("hf")
+        self.export_format.grid(row=5, column=0, sticky="ew", padx=8, pady=2)
+
+        # Selection method
+        ctk.CTkLabel(grid, text="Neuron Selection", font=ctk.CTkFont(size=12)).grid(row=4, column=1, sticky="w", padx=8, pady=14)
+        self.selection_method = ctk.CTkOptionMenu(grid, values=["greedy", "qubo"], font=ctk.CTkFont(size=13))
+        self.selection_method.set("greedy")
+        self.selection_method.grid(row=5, column=1, sticky="ew", padx=8, pady=2)
+
+        # --- Buttons ---
         btn_row = ctk.CTkFrame(scroll, fg_color="transparent")
         btn_row.pack(fill="x", pady=(10, 30))
         self.start_btn = ctk.CTkButton(
             btn_row,
             text="Start Compression",
-            width=220,
+            width=200,
             height=48,
             corner_radius=10,
-            font=ctk.CTkFont(size=16, weight="bold"),
+            font=ctk.CTkFont(size=15, weight="bold"),
             command=self._start_compression,
         )
         self.start_btn.pack(side="left", padx=(0, 15))
+
+        self.plan_btn = ctk.CTkButton(
+            btn_row,
+            text="Plan Only (Dry Run)",
+            width=180,
+            height=48,
+            corner_radius=10,
+            fg_color="#2c3e50",
+            hover_color="#34495e",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=self._start_dry_run,
+        )
+        self.plan_btn.pack(side="left", padx=(0, 15))
 
         self.validate_label = ctk.CTkLabel(
             btn_row,
@@ -611,6 +636,8 @@ class QunartApp(ctk.CTk):
         dataset = self.dataset.get().strip() or "yahma/alpaca-cleaned"
         dtype = self.dtype.get()
         device = self.device.get()
+        export_fmt = self.export_format.get()
+        sel_method = self.selection_method.get()
 
         target = CompressionTarget(
             target_params=target_params,
@@ -625,6 +652,7 @@ class QunartApp(ctk.CTk):
             recovery_dataset=dataset,
             torch_dtype=dtype,  # type: ignore
             device=device,
+            selection_method=sel_method,
         )
 
         self._reset_progress()
@@ -634,17 +662,68 @@ class QunartApp(ctk.CTk):
 
         self.compression_thread = threading.Thread(
             target=self._compression_worker,
-            args=(model, output, target, dataset),
+            args=(model, output, target, dataset, export_fmt),
             daemon=True,
         )
         self.compression_thread.start()
 
-    def _compression_worker(self, model: str, output: str, target: CompressionTarget, dataset: str):
+    def _start_dry_run(self):
+        if self.is_running:
+            return
+
+        self.validate_label.configure(text="")
+        model = self.model_entry.get().strip()
+        target_text = self.target_entry.get().strip()
+        mode = self.target_mode.get()
+
+        if not model:
+            self.validate_label.configure(text="Model path is required for dry run.")
+            return
+
+        target_params = None
+        target_size = None
+        if target_text:
+            try:
+                if mode == "Parameters":
+                    target_params = int(target_text)
+                else:
+                    target_size = float(target_text)
+            except ValueError:
+                self.validate_label.configure(text="Target must be a number.")
+                return
+
+        dtype = self.dtype.get()
+        target = CompressionTarget(
+            target_params=target_params,
+            target_size_gb=target_size,
+            torch_dtype=dtype,  # type: ignore
+        )
+
+        self._reset_progress()
+        self._show_view("progress")
+        self._set_running(True)
+        self._append_log(f"[{datetime.now():%H:%M:%S}] Planning compression (dry run)...\n")
+
+        def _dry_worker():
+            sys.stdout = QueueStdout(self.log_queue)
+            try:
+                pipeline = CompressionPipeline(target)
+                pipeline.dry_run(model)
+                self.log_queue.put("__DONE__")
+            except Exception as exc:
+                self.log_queue.put(f"__ERROR__{exc}")
+            finally:
+                sys.stdout = self.old_stdout
+
+        self.compression_thread = threading.Thread(target=_dry_worker, daemon=True)
+        self.compression_thread.start()
+
+    def _compression_worker(self, model: str, output: str, target: CompressionTarget, dataset: str, export_format: str):
         """Run the pipeline in a background thread with captured stdout."""
         sys.stdout = QueueStdout(self.log_queue)
         try:
             pipeline = CompressionPipeline(target)
-            pipeline.run(model, output, dataset_name=dataset)
+            pipeline.run(model, output, dataset_name=dataset, export_format=export_format)
             self.log_queue.put("__DONE__")
         except Exception as exc:
             self.log_queue.put(f"__ERROR__{exc}")

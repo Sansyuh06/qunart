@@ -35,6 +35,11 @@ class CompressionTarget:
     torch_dtype: Literal["float16", "bfloat16", "float32"] = "float16"
     architecture: Optional[str] = None
 
+    # --- neuron selection ---
+    selection_method: str = "greedy"  # "greedy" or "qubo"
+    lambda_redundancy: float = 0.1
+
+
     def __post_init__(self):
         if self.lora_target_modules is None:
             self.lora_target_modules = [

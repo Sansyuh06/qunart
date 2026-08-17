@@ -10,7 +10,8 @@ def profile_model(model, config) -> Dict[str, Any]:
     intermediate = getattr(config, "intermediate_size", 0)
     layers = getattr(config, "num_hidden_layers", 0)
     vocab = getattr(config, "vocab_size", 0)
-    arch = getattr(config, "architectures", [None])[0]
+    archs = getattr(config, "architectures", None)
+    arch = archs[0] if archs else None
 
     return {
         "total_params": total,
