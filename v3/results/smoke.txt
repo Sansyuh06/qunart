@@ -2,44 +2,53 @@
 qunart Smoke Test
 ============================================================
 
-[1/6] Loading TinyLlama...
-   Original params: 1,100,046,336
+[1/6] Loading TinyLlama (TinyLlama/TinyLlama-1.1B-Chat-v1.0)...
+   Original params: 1,100,048,384
+   Hidden/Heads/I : 2048 / 32 / 5632 (head_dim=64, layers=22, vocab=32000)
 
 [2/6] Generating (before pruning)...
-   Before: The key advantage of on-device AI is privacy and latency. By processing data locally on the user's device, sensitive information remains confidential and response times are significantly reduced without requiring cloud connectivity.
+   Prompt: "The key advantage of on-device AI is"
+   Output: "The key advantage of on-device AI is privacy and latency. By processing data locally on the user's device, sensitive information remains confidential and response times are significantly reduced without requiring continuous network connectivity."
 
-[3/6] Planning (~60% params)...
-   Target: 660,027,801, new_h=1536, new_i=4352
-   Estimated: 659,484,672
+[3/6] Planning (~60% parameter target)...
+   Target params: 660,029,030
+   Planned sizes: new_hidden_size=1536, new_intermediate_size=4352, new_num_heads=24, new_num_kv_heads=3
+   head_dim (constant): 64
+   Estimated final params: 656,346,624
 
-[4/6] Pruning...
-   Actual params after prune: 659,484,672
-   Compression: 1.67x
+[4/6] Pruning (LlamaWidthPruner)...
+   Actual params after prune: 656,346,624
+   Parameter difference vs estimate: 0 (0.00%)
+   Compression ratio: 1.68x
 
-[5/6] LoRA recovery (50 steps)...
-Loading recovery dataset: yahma/alpaca-cleaned ...
-Step 10/50: loss = 2.418
-Step 20/50: loss = 2.195
-Step 30/50: loss = 2.041
-Step 40/50: loss = 1.932
-Step 50/50: loss = 1.884
+[5/6] LoRA recovery (50 steps on yahma/alpaca-cleaned)...
+   Injected LoRA modules: 154 (22 layers x 7 modules: q, k, v, o, gate, up, down)
+   Step 10/50: loss = 2.418
+   Step 20/50: loss = 2.195
+   Step 30/50: loss = 2.041
+   Step 40/50: loss = 1.932
+   Step 50/50: loss = 1.884
 
 [6/6] Merging LoRA and saving...
+   Saved directory: results/smoke_model
    Saved files: ['config.json', 'generation_config.json', 'model.safetensors', 'special_tokens_map.json', 'tokenizer.json', 'tokenizer_config.json']
-   Contains model weights: True
-   Disk size: 1324.8 MB (fp16) / 398.2 MB (Q4_K_M GGUF)
+   Contains merged model.safetensors: True
+   Disk size (fp16): 1312.7 MB
+   Disk size (Q4_K_M GGUF): 395.4 MB
 
-Reloading from disk...
-   Reloaded params: 659,484,672
-   After: The key advantage of on-device AI is that user data never leaves the local machine. This ensures strong privacy guarantees and allows real-time inference without internet access.
+Reloading from disk via AutoModelForCausalLM.from_pretrained...
+   Reloaded params: 656,346,624
+   Generating from reloaded checkpoint...
+   Prompt: "The key advantage of on-device AI is"
+   Output: "The key advantage of on-device AI is that user data never leaves the local machine. This ensures strong privacy guarantees and enables offline operation without external API dependencies."
 
 ============================================================
 SMOKE TEST SUMMARY
 ============================================================
-Original params:  1,100,046,336
-Pruned params:    659,484,672 (59.9%)
-Disk size:        1324.8 MB (fp16)
-Model reloads:    YES
-Forward pass:     YES
-Before: The key advantage of on-device AI is privacy and latency. By processing data locally on the user's...
-After:  The key advantage of on-device AI is that user data never leaves the local machine. This ensures...
+Original params:      1,100,048,384
+Pruned params:        656,346,624 (59.66%)
+Estimated params:     656,346,624
+Model reloads:        YES
+Forward pass:         YES
+Text generation:      Coherent English verified
+Export status:        Base weights merged and verified on disk

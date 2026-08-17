@@ -11,7 +11,7 @@ def profile_model(model, config) -> Dict[str, Any]:
     layers = getattr(config, "num_hidden_layers", 0)
     vocab = getattr(config, "vocab_size", 0)
     archs = getattr(config, "architectures", None)
-    arch = archs[0] if archs else None
+    arch = archs[0] if archs else getattr(model, "__class__", type(model)).__name__
 
     return {
         "total_params": total,
@@ -37,11 +37,12 @@ def total_params_at(profile: Dict[str, Any], new_h: int, new_i: int) -> int:
     tie = profile["tie_word_embeddings"]
 
     new_num_heads = new_h // head_dim
-    new_num_kv_heads = max(1, round(kv_heads * new_h / profile["hidden_size"]))
-    # keep the original grouping ratio if possible
-    ratio = heads / kv_heads
-    if new_num_heads % new_num_kv_heads != 0:
-        new_num_kv_heads = max(1, round(new_num_heads / ratio))
+    target_kv = max(1, round(kv_heads * new_h / profile["hidden_size"]))
+    new_num_kv_heads = 1
+    for d in range(min(new_num_heads, target_kv), 0, -1):
+        if new_num_heads % d == 0:
+            new_num_kv_heads = d
+            break
     new_kv_dim = new_num_kv_heads * head_dim
 
     embedding = vocab * new_h
@@ -52,5 +53,6 @@ def total_params_at(profile: Dict[str, Any], new_h: int, new_i: int) -> int:
     mlp_per_layer = 2 * (new_i * new_h) + (new_h * new_i)
     norms_per_layer = 2 * new_h
 
-    total = embedding + lm_head + layers * (attn_per_layer + mlp_per_layer + norms_per_layer)
+    final_norm = new_h
+    total = embedding + lm_head + final_norm + layers * (attn_per_layer + mlp_per_layer + norms_per_layer)
     return int(total)

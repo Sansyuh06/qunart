@@ -4,8 +4,6 @@
 
 qunart shrinks large language models so they run on phones and edge devices. You hand it a model and a size budget (`--target-size-gb 1.5`), and it returns a smaller model that still works, packaged for on-device inference.
 
-## How It Works
-
 ```mermaid
 flowchart LR
     A["Load\nAny HF CausalLM"] --> B["Profile\nCount params,\ndetect arch"]
@@ -14,10 +12,6 @@ flowchart LR
     D --> E["Recover\nLoRA fine-tune\non instructions"]
     E --> F["Export\nHF / GGUF / ONNX"]
 ```
-
-**Method:** Structured width pruning that holds `head_dim` constant so rotary embeddings stay valid without rebuilding, preserves the GQA grouping ratio (`num_heads % num_kv_heads == 0`), ranks MLP neurons by importance, then LoRA-recovers quality on an instruction corpus.
-
-**Width pruning over depth pruning:** Every layer survives, each one just gets thinner. Dropping whole layers severs residual paths; narrowing preserves every one of them.
 
 ## What Makes It Different
 
@@ -33,6 +27,7 @@ Every other tool asks "what sparsity ratio do you want?" qunart asks "what devic
 ## Quick Start
 
 ```bash
+cd v3
 pip install -e .
 
 # Plan only (instant, <1s, no GPU needed)
@@ -59,7 +54,7 @@ qunart --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
 | **Phi-3-mini-4k-instruct (Stock)** | 3,821,079,552 | 2.31 GB | 7.48 | TBD | TBD | TBD | TBD | TBD |
 | **qunart-pruned (Phi-3-mini, 50% width)** | 2,014,352,384 | 1.21 GB | TBD* | TBD* | TBD* | TBD* | TBD | TBD |
 
-*See [`results/RESULTS.md`](results/RESULTS.md) for detailed benchmark notes.*
+*See [`v3/results/RESULTS.md`](v3/results/RESULTS.md) for full benchmark details.*
 
 ## Supported Architectures
 
@@ -69,8 +64,6 @@ qunart --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
 | `Qwen2ForCausalLM` | Qwen-2 | `LlamaWidthPruner` |
 | `MistralForCausalLM` | Mistral | `LlamaWidthPruner` |
 | `Phi3ForCausalLM` | Phi-3 | `Phi3WidthPruner` |
-
-Phi-3 requires its own pruner because it fuses `q/k/v` into `qkv_proj` and `gate/up` into `gate_up_proj`.
 
 ## QUBO Neuron Selection
 
@@ -84,32 +77,15 @@ Use `--selection-method qubo` to enable. Default is `greedy` (top-K by importanc
 
 ## Caveats (Read This)
 
-**Recovery budget.** Published structured-pruning work recovers with far more compute than this pipeline uses:
+- **Recovery budget.** Published structured-pruning work recovers with far more compute than this pipeline uses (LLM-Pruner: ~50k samples; Sheared-LLaMA: 50B tokens; Minitron: 94B tokens vs qunart default ~1M tokens).
+- **Structural caveat.** Slicing the residual stream by index is arbitrary — channel $k$ is a basis coordinate shared across all layers. Quality loss will exceed what parameter count alone suggests. (See [`v3/NOTES.md`](v3/NOTES.md) for SliceGPT rotation design).
+- **QUBO vs greedy.** On 1.1B models, the measured delta is ~0.18 PPL (18.06 QUBO vs 18.24 Greedy), which is marginal. Greedy is kept as default for speed.
+- **Measured vs Estimated.** Perplexity and parameter counts are verified from actual runs. On-device metrics are marked TBD pending hardware tethering.
 
-| Work | Recovery budget |
-|------|----------------|
-| LLM-Pruner | ~50k LoRA samples |
-| Sheared-LLaMA | 50B tokens continued pretraining |
-| Minitron | ~94B tokens distillation |
-| **qunart** (default) | **~1M tokens** (500 steps × 2k Alpaca samples) |
+## Project Structure
 
-Quality retention should be evaluated with this context in mind.
-
-**Structural caveat.** Slicing the residual stream by index is arbitrary — channel `k` is a basis coordinate shared across all layers, not the k-th most important feature. Quality loss will exceed what the parameter count alone suggests. A principled fix (SliceGPT-style rotation before slicing) is planned and documented in [`NOTES.md`](NOTES.md).
-
-**QUBO vs greedy.** On 1.1B models, the measured delta is ~0.18 PPL (18.06 QUBO vs 18.24 Greedy), which is marginal. Greedy is kept as default for speed.
-
-**What is measured vs estimated.** Perplexity and parameter counts come from actual runs. On-device tok/s and RAM are marked TBD until measured on physical hardware.
-
-## Python API
-
-```python
-from qunart import CompressionTarget, CompressionPipeline
-
-target = CompressionTarget(target_size_gb=1.5)
-pipeline = CompressionPipeline(target)
-pipeline.run("TinyLlama/TinyLlama-1.1B-Chat-v1.0", "./output")
-```
+- `v3/` — Active framework codebase (CLI, GUI, core compression engine, tests, documentation).
+- `archive/` — Historical prototypes (v1, v2).
 
 ## License
 

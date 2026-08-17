@@ -52,10 +52,13 @@ class LlamaWidthPruner(BasePruner):
             )
 
         new_num_heads = self.new_h // head_dim
-        new_num_kv_heads = max(1, round(num_kv_heads * self.new_h / old_h))
-        # preserve the original GQA grouping ratio if exact divisibility fails
-        if new_num_heads % new_num_kv_heads != 0:
-            new_num_kv_heads = max(1, round(new_num_heads / (num_heads / num_kv_heads)))
+        target_kv = max(1, round(num_kv_heads * self.new_h / old_h))
+        # Ensure new_num_kv_heads is an exact divisor of new_num_heads (GQA requirement)
+        new_num_kv_heads = 1
+        for d in range(min(new_num_heads, target_kv), 0, -1):
+            if new_num_heads % d == 0:
+                new_num_kv_heads = d
+                break
         new_kv_dim = new_num_kv_heads * head_dim
 
         # --- embeddings ---
@@ -179,9 +182,12 @@ class Phi3WidthPruner(BasePruner):
             )
 
         new_num_heads = self.new_h // head_dim
-        new_num_kv_heads = max(1, round(num_kv_heads * self.new_h / old_h))
-        if new_num_heads % new_num_kv_heads != 0:
-            new_num_kv_heads = max(1, round(new_num_heads / (num_heads / num_kv_heads)))
+        target_kv = max(1, round(num_kv_heads * self.new_h / old_h))
+        new_num_kv_heads = 1
+        for d in range(min(new_num_heads, target_kv), 0, -1):
+            if new_num_heads % d == 0:
+                new_num_kv_heads = d
+                break
 
         new_q_dim = new_num_heads * head_dim
         new_kv_dim = new_num_kv_heads * head_dim
