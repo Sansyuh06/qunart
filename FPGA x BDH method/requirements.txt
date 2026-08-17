@@ -1,0 +1,6 @@
+fastapi
+numpy
+pyserial
+torch
+uvicorn[standard]
+websockets
