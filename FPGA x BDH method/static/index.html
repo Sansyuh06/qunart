@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BDH // Tang Nano 9K Monochrome Telemetry</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260814_3" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span>BDH x TANG NANO 9K</span>
+      <span class="brand-tag">HEBBIAN SILICON ENGINE</span>
+    </div>
+    <div id="fpga-status-badge" class="status-pill disconnected">
+      <span class="status-dot"></span>
+      <span id="fpga-status-text">TANG NANO 9K : SCANNING REAL FPGA...</span>
+    </div>
+  </header>
+
+  <main class="split-container">
+    <section class="pane pane-left">
+      <div class="chat-header">
+        <span>/// CHATBOT TOKEN STREAM</span>
+        <div id="led-rail" class="led-rail idle" aria-label="FPGA LED activity">
+          <span class="led"></span>
+          <span class="led"></span>
+          <span class="led"></span>
+          <span class="led"></span>
+          <span class="led"></span>
+          <span class="led"></span>
+        </div>
+      </div>
+
+      <div id="chat-transcript" class="chat-transcript">
+        <article class="message ai">
+          <span class="msg-sender">BDH FPGA SYSTEM</span>
+          <div class="msg-content">
+            RealBDHLanguageModel-128d loaded. Linear projections
+            route through Tang Nano 9K INT8 DSP blocks over UART when
+            the FPGA is connected.
+          </div>
+          <div id="init-telemetry" class="msg-telemetry">
+            [MODEL: BDH 128D | FPGA: WAITING FOR STATUS... | LED RAIL: IDLE]
+          </div>
+        </article>
+      </div>
+
+      <div class="chat-input-bar">
+        <div class="quick-prompts">
+          <button class="quick-btn" data-prompt="what is 2+2">what is 2+2</button>
+          <button class="quick-btn" data-prompt="explain hebbian memory">explain hebbian memory</button>
+          <button class="quick-btn" data-prompt="what is a dragon">what is a dragon</button>
+          <button class="quick-btn" data-prompt="what is an fpga">what is an fpga</button>
+        </div>
+        <div class="hardware-controls" style="display: flex; gap: 12px; margin-bottom: 8px; font-size: 11px; align-items: center;">
+          <select id="offload-mode" style="background: #111; color: #eee; border: 1px solid #333; padding: 4px 8px; font-family: monospace; font-size: 11px;">
+            <option value="head" selected>MODE: HEAD-ONLY FPGA (FAST UART STREAM)</option>
+            <option value="full">MODE: FULL FPGA (ALL 7 LINEAR LAYERS)</option>
+          </select>
+          <label style="display: flex; align-items: center; gap: 4px; color: #888; font-family: monospace; cursor: pointer;">
+            <input type="checkbox" id="hardware-required" />
+            <span>REQUIRE HARDWARE (FAIL LOUD)</span>
+          </label>
+        </div>
+        <div class="input-row">
+          <input
+            id="user-input"
+            type="text"
+            placeholder="Ask BDH x Tang Nano 9K..."
+            autocomplete="off"
+          />
+          <button id="send-button" class="send-btn">GENERATE ON FPGA</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="pane pane-right">
+      <article class="viz-card graph-card">
+        <div class="viz-header">
+          <span>/// EMERGENT CAUSAL CIRCUIT GRAPH</span>
+          <span class="tag">Gx = E @ Dx</span>
+        </div>
+        <canvas id="graph-canvas"></canvas>
+      </article>
+
+      <article class="viz-card">
+        <div class="viz-header">
+          <span>/// RELU SPARSITY AND ZERO-SKIPPING</span>
+          <span id="speedup-tag" class="tag">0.00x</span>
+        </div>
+        <div class="chart-row">
+          <span class="chart-label">ACTIVE</span>
+          <div class="chart-track">
+            <div id="active-bar" class="chart-bar active-bar">0%</div>
+          </div>
+        </div>
+        <div class="chart-row">
+          <span class="chart-label">ZERO-SKIPPED</span>
+          <div class="chart-track">
+            <div id="skipped-bar" class="chart-bar skipped-bar">0%</div>
+          </div>
+        </div>
+      </article>
+
+      <article class="viz-card">
+        <div class="viz-header">
+          <span>/// HEBBIAN FAST-WEIGHT MEMORY</span>
+          <span class="tag">16x16 RHO</span>
+        </div>
+        <div id="hebbian-grid" class="hebbian-grid"></div>
+      </article>
+    </section>
+  </main>
+
+  <script src="/static/js/graph_visualizer.js?v=20260814_3"></script>
+  <script src="/static/js/websocket.js?v=20260814_3"></script>
+  <script src="/static/js/chat.js?v=20260814_3"></script>
+</body>
+</html>
