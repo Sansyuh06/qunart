@@ -87,7 +87,7 @@ Use `--selection-method qubo` to enable. Default is `greedy` (top-K by importanc
 ## Project Structure
 
 - `v3/` — Active framework codebase (CLI, GUI, core compression engine, tests, documentation).
-- `archive/` — Historical prototypes (v1, v2).
+- `archive/` — Historical prototypes (`v1`, `v2`) and legacy hardware explorations.
 
 ## License
 

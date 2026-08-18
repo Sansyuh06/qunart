@@ -81,9 +81,14 @@ where $S_{ij}$ is the cosine similarity between concatenated `[gate_i ; up_i]` w
 
 Use `--selection-method qubo` to enable. Default is `greedy` (top-K by importance).
 
+## Project Structure
+
+- `v3/` — Active framework codebase (CLI, GUI, core compression engine, tests, documentation).
+- `archive/` — Historical prototypes (`v1`, `v2`) and legacy hardware explorations.
+
 ## Caveats (Read This)
 
-- **Recovery budget.** Published structured-pruning work recovers with far more compute than this pipeline uses (LLM-Pruner: ~50k samples; Sheared-LLaMA: 50B tokens; Minitron: 94B tokens vs qunart default ~1M tokens).
+- **Recovery budget.** LLM-Pruner: ~50k samples; Sheared-LLaMA: 50B tokens; Minitron: 94B tokens vs qunart default ~1M tokens).
 - **Structural caveat.** Slicing the residual stream by index is arbitrary — channel $k$ is a basis coordinate shared across all layers. Quality loss will exceed what parameter count alone suggests. (See [`NOTES.md`](NOTES.md) for SliceGPT rotation design).
 - **Measured vs Estimated.** Perplexity and parameter counts come from actual runs. On-device tok/s and RAM are marked TBD until measured on physical hardware.
 
