@@ -97,3 +97,31 @@ class TestExport:
             with torch.no_grad():
                 out = reloaded(input_ids)
             assert out.logits.shape == (1, 4, 1000)
+
+    def test_export_gguf_produces_valid_gguf_binary(self):
+        """Verify export_gguf produces a valid GGUF file readable by gguf.GGUFReader."""
+        import gguf
+        from qunart.exporter import export_gguf
+
+        model, config = _make_tiny_llama()
+        pruner = LlamaWidthPruner(256, 688)
+        model, config = pruner.prune(model, config)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model.save_pretrained(tmpdir)
+            gguf_path = os.path.join(tmpdir, "model.gguf")
+
+            export_gguf(tmpdir, gguf_path, quant="F16")
+
+            assert os.path.exists(gguf_path), "GGUF file was not created"
+            assert os.path.getsize(gguf_path) > 0, "GGUF file is empty"
+
+            # Read back using GGUFReader to confirm specification compliance
+            reader = gguf.GGUFReader(gguf_path)
+            num_tensors = len(reader.tensors)
+            num_fields = len(reader.fields)
+            del reader  # release file lock on Windows
+
+            assert num_tensors > 0, "GGUF contains no tensors"
+            assert num_fields > 0, "GGUF contains no metadata fields"
+
