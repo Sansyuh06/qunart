@@ -80,14 +80,30 @@ class QUBOSolver:
     ) -> np.ndarray:
         n = len(importances)
 
-        # If n is too large for a tractable QUBO, pre-filter to the top
-        # MAX_QUBO_SIZE candidates and greedily select the rest.
+        # If n is larger than the tractable QUBO capacity, solve on the contested band
         if n > self.MAX_QUBO_SIZE:
             return self._solve_qubo_with_prefilter(
                 importances, target_keep,
                 gate_weights=gate_weights,
                 up_weights=up_weights,
             )
+
+        return self._solve_qubo_direct(
+            importances, target_keep,
+            gate_weights=gate_weights,
+            up_weights=up_weights,
+        )
+
+    def _solve_qubo_direct(
+        self,
+        importances: np.ndarray,
+        target_keep: int,
+        gate_weights: Optional[np.ndarray] = None,
+        up_weights: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Solve QUBO directly on a candidate set of size <= MAX_QUBO_SIZE."""
+        n = len(importances)
+        target_keep = max(1, min(target_keep, n))
 
         # Build the QUBO matrix
         Q = self._build_qubo_matrix(
@@ -132,23 +148,45 @@ class QUBOSolver:
         gate_weights: Optional[np.ndarray] = None,
         up_weights: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """For large n, pre-select top MAX_QUBO_SIZE candidates, solve QUBO on those."""
+        """
+        For large candidate counts (n > MAX_QUBO_SIZE), isolate the contested
+        boundary band around the cutoff threshold, take clear winners greedily,
+        and solve QUBO on the contested candidate band.
+        """
         n = len(importances)
-        top_indices = np.argsort(importances)[-self.MAX_QUBO_SIZE:]
+        sorted_indices = np.argsort(importances)  # ascending order
 
-        sub_imp = importances[top_indices]
-        sub_gate = gate_weights[top_indices] if gate_weights is not None else None
-        sub_up = up_weights[top_indices] if up_weights is not None else None
+        band_size = min(self.MAX_QUBO_SIZE, n)
 
-        sub_keep = min(target_keep, len(top_indices))
-        sub_selected = self._solve_qubo(
-            sub_imp, sub_keep,
+        # Sure winners above contested boundary
+        sure_keep_count = max(0, target_keep - band_size // 2)
+        sure_keep_count = min(sure_keep_count, n - band_size)
+
+        sure_keepers = (
+            sorted_indices[n - sure_keep_count:]
+            if sure_keep_count > 0
+            else np.array([], dtype=int)
+        )
+
+        quota_needed = target_keep - sure_keep_count
+
+        # Contested candidate window
+        contested_start = max(0, n - sure_keep_count - band_size)
+        contested_end = n - sure_keep_count
+        contested_indices = sorted_indices[contested_start:contested_end]
+
+        sub_imp = importances[contested_indices]
+        sub_gate = gate_weights[contested_indices] if gate_weights is not None else None
+        sub_up = up_weights[contested_indices] if up_weights is not None else None
+
+        sub_selected = self._solve_qubo_direct(
+            sub_imp, quota_needed,
             gate_weights=sub_gate,
             up_weights=sub_up,
         )
 
-        # Map back to original indices
-        return top_indices[sub_selected]
+        qubo_selected = contested_indices[sub_selected]
+        return np.concatenate([sure_keepers, qubo_selected])
 
     def _build_qubo_matrix(
         self,

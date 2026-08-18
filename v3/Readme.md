@@ -17,8 +17,6 @@ flowchart LR
 
 **Method:** Structured width pruning that holds `head_dim` constant so rotary embeddings stay valid without rebuilding, preserves the GQA grouping ratio (`num_heads % num_kv_heads == 0`), ranks MLP neurons by importance, then LoRA-recovers quality on an instruction corpus.
 
-**Width pruning over depth pruning:** Every layer survives, each one just gets thinner. Dropping whole layers severs residual paths; narrowing preserves every one of them.
-
 ## What Makes It Different
 
 | Tool | Interface | Approach |
@@ -54,7 +52,7 @@ qunart --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **TinyLlama-1.1B-Chat (Stock)** | 1,100,048,384 | 664 MB | 10.82 | TBD | TBD | TBD | TBD | TBD |
 | **qunart-pruned (TinyLlama, Greedy, +LoRA)** | 656,346,624 | 395 MB | 18.24 | TBD | TBD | TBD | TBD | TBD |
-| **qunart-pruned (TinyLlama, QUBO, +LoRA)** | 656,346,624 | 395 MB | 18.06 | TBD | TBD | TBD | TBD | TBD |
+| **qunart-pruned (TinyLlama, QUBO, +LoRA)** | 656,346,624 | 395 MB | TBD | TBD | TBD | TBD | TBD | TBD |
 | **qunart-pruned (TinyLlama, Greedy, No Recovery)** | 656,346,624 | 395 MB | 42.51 | TBD | TBD | TBD | TBD | TBD |
 | **Phi-3-mini-4k-instruct (Stock)** | 3,821,079,552 | 2.31 GB | 7.48 | TBD | TBD | TBD | TBD | TBD |
 | **qunart-pruned (Phi-3-mini, 50% width)** | 2,014,352,384 | 1.21 GB | TBD* | TBD* | TBD* | TBD* | TBD | TBD |
@@ -70,36 +68,24 @@ qunart --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
 | `MistralForCausalLM` | Mistral | `LlamaWidthPruner` |
 | `Phi3ForCausalLM` | Phi-3 | `Phi3WidthPruner` |
 
-Phi-3 requires its own pruner because it fuses `q/k/v` into `qkv_proj` and `gate/up` into `gate_up_proj`.
+## Neuron Selection & QUBO Formulation
 
-## QUBO Neuron Selection
-
-qunart includes a genuine QUBO (Quadratic Unconstrained Binary Optimization) formulation for neuron selection that adds a pairwise redundancy penalty — two neurons whose weight vectors are highly correlated are penalised for being kept together:
+qunart formulates neuron selection as a Quadratic Unconstrained Binary Optimization (QUBO) problem with a pairwise redundancy penalty — penalizing keeping two neurons whose weight vectors are highly correlated:
 
 $$\min \; -\sum_i I_i \cdot x_i \;+\; \lambda_{\text{red}} \sum_{i<j} S_{ij} \cdot x_i x_j \;+\; \lambda_{\text{card}} \left(\sum_i x_i - K\right)^2$$
 
-where $S_{ij}$ is the cosine similarity between concatenated `[gate_i ; up_i]` weight rows (clamped ≥ 0).
+where $S_{ij}$ is the cosine similarity between concatenated `[gate_i ; up_i]` weight rows (clamped $\ge 0$).
+
+> **Note on Optimization & Quantum Compatibility:**  
+> Neuron selection is formulated as a QUBO and solved classically via simulated annealing (using D-Wave's `neal` library when installed) with a greedy top-$K$ fallback. The mathematical formulation is quantum-annealer-compatible (can be dispatched to D-Wave Leap QPUs), but all current benchmark results use classical solvers.
 
 Use `--selection-method qubo` to enable. Default is `greedy` (top-K by importance).
 
 ## Caveats (Read This)
 
-**Recovery budget.** Published structured-pruning work recovers with far more compute than this pipeline uses:
-
-| Work | Recovery budget |
-|------|----------------|
-| LLM-Pruner | ~50k LoRA samples |
-| Sheared-LLaMA | 50B tokens continued pretraining |
-| Minitron | ~94B tokens distillation |
-| **qunart** (default) | **~1M tokens** (500 steps × 2k Alpaca samples) |
-
-Quality retention should be evaluated with this context in mind.
-
-**Structural caveat.** Slicing the residual stream by index is arbitrary — channel `k` is a basis coordinate shared across all layers, not the k-th most important feature. Quality loss will exceed what the parameter count alone suggests. A principled fix (SliceGPT-style rotation before slicing) is planned and documented in [`NOTES.md`](NOTES.md).
-
-**QUBO vs greedy.** On 1.1B models, the measured delta is ~0.18 PPL (18.06 QUBO vs 18.24 Greedy), which is marginal. Greedy is kept as default for speed.
-
-**What is measured vs estimated.** Perplexity and parameter counts come from actual runs. On-device tok/s and RAM are marked TBD until measured on physical hardware.
+- **Recovery budget.** Published structured-pruning work recovers with far more compute than this pipeline uses (LLM-Pruner: ~50k samples; Sheared-LLaMA: 50B tokens; Minitron: 94B tokens vs qunart default ~1M tokens).
+- **Structural caveat.** Slicing the residual stream by index is arbitrary — channel $k$ is a basis coordinate shared across all layers. Quality loss will exceed what parameter count alone suggests. (See [`NOTES.md`](NOTES.md) for SliceGPT rotation design).
+- **Measured vs Estimated.** Perplexity and parameter counts come from actual runs. On-device tok/s and RAM are marked TBD until measured on physical hardware.
 
 ## Python API
 

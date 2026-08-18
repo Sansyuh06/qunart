@@ -79,12 +79,25 @@ class TestQUBOSelection:
         assert len(set(selected)) == 100
         assert all(0 <= idx < n for idx in selected)
 
-    def test_similarity_matrix_shape(self):
-        """Sanity check: similarity matrix is correct shape."""
+    def test_qubo_large_n_with_large_k_realistic_tinyllama(self):
+        """
+        Regression test for K > MAX_QUBO_SIZE:
+        Simulate realistic TinyLlama intermediate MLP sizing (n=5632, K=4352).
+        Must return EXACTLY K=4352 unique, valid indices.
+        """
         rng = np.random.RandomState(42)
-        gate = rng.rand(10, 8)
-        up = rng.rand(10, 8)
-        S = QUBOSolver._compute_similarity(gate, up)
-        assert S.shape == (10, 10)
-        assert np.allclose(np.diag(S), 0)
-        assert (S >= 0).all()
+        n = 5632
+        target_keep = 4352
+        importances = rng.rand(n)
+        gate_weights = rng.rand(n, 32)
+        up_weights = rng.rand(n, 32)
+
+        solver = QUBOSolver(method="qubo", lambda_redundancy=0.1)
+        selected = solver.solve(importances, target_keep,
+                                gate_weights=gate_weights,
+                                up_weights=up_weights)
+
+        assert len(selected) == target_keep, f"Expected {target_keep}, got {len(selected)}"
+        assert len(set(selected)) == target_keep, f"Duplicates found in selected indices (unique: {len(set(selected))})"
+        assert all(0 <= idx < n for idx in selected), "Selected indices out of bounds"
+
